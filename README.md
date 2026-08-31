@@ -128,4 +128,14 @@ Para abrirla:
 4. Espera la sincronizacion de Gradle.
 5. Ejecuta la app en un emulador o telefono Android.
 
-La primera version todavia no usa la camara real. El boton `Iniciar conteo` genera un conteo simulado para validar la interfaz y el flujo de registro. La siguiente etapa es reemplazar esa simulacion por CameraX y un modelo TensorFlow Lite.
+La app Android ya incluye una primera vista de camara con CameraX y conteo de rostros con ML Kit Face Detection.
+
+Para probarla en un telefono:
+
+1. Conecta el telefono por USB.
+2. Activa depuracion USB.
+3. Selecciona el dispositivo en Android Studio.
+4. Presiona `Run`.
+5. Acepta el permiso de camara en el telefono.
+
+Esta etapa detecta rostros y cuenta cuantos aparecen en la camara. Todavia no identifica el nombre de cada estudiante; esa funcion requiere un modulo adicional de credenciales faciales, consentimiento informado y almacenamiento seguro.

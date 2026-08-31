@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Asistencia IA</string>
+    <string name="app_subtitle">Registro de asistencia estudiantil con deteccion inteligente.</string>
+    <string name="class_label">Clase</string>
+    <string name="start_scan">Activar camara</string>
+    <string name="save_attendance">Guardar asistencia</string>
+    <string name="people_count_initial">0 estudiantes</string>
+    <string name="people_count">%1$d estudiantes</string>
+    <string name="status_initial">Esperando permiso de camara.</string>
+    <string name="scan_ready">Camara activa. La IA esta detectando rostros.</string>
+    <string name="camera_permission_denied">No se concedio permiso de camara.</string>
+    <string name="saved_record">Registro guardado en historial local temporal.</string>
+    <string name="history_label">Historial de registros</string>
+</resources>
