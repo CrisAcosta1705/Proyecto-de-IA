@@ -6,3 +6,11 @@ runs/
 data/
 videos/
 yolov*.pt
+
+# Android
+android-app/.gradle/
+android-app/local.properties
+android-app/build/
+android-app/app/build/
+*.apk
+*.aab

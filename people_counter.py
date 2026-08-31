@@ -12,11 +12,11 @@ PERSON_CLASS_ID = 0
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Conteo de personas con YOLO usando webcam, video local o ESP32-CAM."
+        description="Conteo de personas con YOLO usando webcam, video local o stream de red."
     )
     parser.add_argument(
         "--source",
-        choices=("webcam", "video", "esp32"),
+        choices=("webcam", "video", "stream"),
         default="webcam",
         help="Fuente de video a usar.",
     )
@@ -31,8 +31,8 @@ def parse_args():
         help="Ruta de un archivo de video cuando --source video.",
     )
     parser.add_argument(
-        "--esp32-url",
-        help="URL del stream de ESP32-CAM, por ejemplo http://192.168.1.45:81/stream.",
+        "--stream-url",
+        help="URL de un stream de video, por ejemplo una camara IP o fuente HTTP.",
     )
     parser.add_argument(
         "--model",
@@ -61,10 +61,10 @@ def get_capture_source(args):
             raise ValueError("Debes indicar --video-path cuando usas --source video.")
         return args.video_path
 
-    if args.source == "esp32":
-        if not args.esp32_url:
-            raise ValueError("Debes indicar --esp32-url cuando usas --source esp32.")
-        return args.esp32_url
+    if args.source == "stream":
+        if not args.stream_url:
+            raise ValueError("Debes indicar --stream-url cuando usas --source stream.")
+        return args.stream_url
 
     raise ValueError(f"Fuente no soportada: {args.source}")
 
@@ -105,7 +105,7 @@ def main():
     if not cap.isOpened():
         raise RuntimeError(
             "No se pudo abrir la fuente de video. "
-            "Revisa la webcam, el archivo de video o la URL de la ESP32-CAM."
+            "Revisa la webcam, el archivo de video o la URL del stream."
         )
 
     csv_file, csv_writer = open_csv_writer(args.csv)

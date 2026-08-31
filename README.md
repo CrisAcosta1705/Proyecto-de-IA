@@ -1,24 +1,71 @@
-# Conteo de personas con YOLO
+# Asistencia estudiantil con IA
 
-Proyecto base para detectar y contar personas usando Python, OpenCV y YOLO.
+Proyecto enfocado en una aplicacion Android para asistencia estudiantil con inteligencia artificial integrada.
 
-## Activar entorno
+La primera etapa usa Python como prototipo para validar el conteo de personas con la camara de la laptop. La version final del proyecto debe llevar esta logica a Android usando la camara del telefono.
 
-En PowerShell, dentro de esta carpeta:
+## Objetivo
+
+Crear una aplicacion Android capaz de apoyar el registro de asistencia estudiantil mediante:
+
+- Conteo de personas presentes en el aula.
+- Captura de evidencia visual controlada.
+- Registro de fecha, hora y grupo/clase.
+- Posible identificacion de estudiantes con credenciales autorizadas.
+- Almacenamiento local o en base de datos.
+
+## Enfoque tecnico
+
+### Prototipo actual
+
+El prototipo actual esta hecho en Python y permite probar la deteccion de personas antes de construir la app Android.
+
+Herramientas usadas:
+
+- Python 3.12
+- OpenCV
+- Ultralytics YOLO
+- PyTorch
+- NumPy
+
+### Aplicacion Android final
+
+Para la aplicacion Android se recomienda usar:
+
+- Kotlin como lenguaje principal.
+- Android Studio.
+- CameraX para capturar imagen/video.
+- TensorFlow Lite para ejecutar modelos de IA en el dispositivo.
+- Room o SQLite para guardar asistencia localmente.
+- Firebase opcional para sincronizacion en la nube.
+
+## Flujo propuesto
+
+```text
+App Android
+    |
+    v
+Camara del telefono
+    |
+    v
+Modelo de IA local
+    |
+    v
+Conteo de personas / validacion de estudiantes
+    |
+    v
+Registro de asistencia
+```
+
+## Probar el prototipo con camara de laptop
+
+Activa el entorno virtual:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-Si PowerShell bloquea la activacion del entorno, ejecuta una vez:
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
-
-Luego vuelve a activar el entorno.
-
-## Probar con camara de laptop
+Ejecuta el conteo:
 
 ```powershell
 python people_counter.py
@@ -26,7 +73,7 @@ python people_counter.py
 
 Para cerrar la ventana, presiona `q`.
 
-Si tu laptop tiene mas de una camara, prueba otro indice:
+Si tu laptop tiene mas de una camara:
 
 ```powershell
 python people_counter.py --camera-index 1
@@ -44,26 +91,41 @@ python people_counter.py --source video --video-path .\videos\prueba.mp4
 python people_counter.py --csv .\data\conteos.csv
 ```
 
-## Usar ESP32-CAM despues
+## Siguiente etapa
 
-Cuando tengas la ESP32-CAM transmitiendo por WiFi, usa:
+La siguiente etapa del proyecto es crear una app Android base con:
 
-```powershell
-python people_counter.py --source esp32 --esp32-url http://192.168.1.45:81/stream
+- Pantalla de inicio de sesion o seleccion de clase.
+- Pantalla de camara.
+- Boton para iniciar conteo.
+- Resultado del conteo.
+- Registro de asistencia por fecha y hora.
+- Base de datos local.
+
+Despues se puede integrar IA en Android usando TensorFlow Lite.
+
+## Estructura Android inicial
+
+La app Android inicial esta en:
+
+```text
+android-app/
 ```
 
-Cambia la IP por la que muestre tu ESP32-CAM en el monitor serial de Arduino IDE.
+Contiene:
 
-## Ajustar sensibilidad
+- Proyecto Gradle Android.
+- Modulo `app`.
+- `MainActivity.kt`.
+- Pantalla inicial en XML.
+- Dependencias preparadas para CameraX y TensorFlow Lite.
 
-Si detecta personas falsas, sube la confianza:
+Para abrirla:
 
-```powershell
-python people_counter.py --confidence 0.65
-```
+1. Abre Android Studio.
+2. Selecciona `Open`.
+3. Abre la carpeta `android-app`.
+4. Espera la sincronizacion de Gradle.
+5. Ejecuta la app en un emulador o telefono Android.
 
-Si no detecta personas reales, baja un poco la confianza:
-
-```powershell
-python people_counter.py --confidence 0.4
-```
+La primera version todavia no usa la camara real. El boton `Iniciar conteo` genera un conteo simulado para validar la interfaz y el flujo de registro. La siguiente etapa es reemplazar esa simulacion por CameraX y un modelo TensorFlow Lite.
