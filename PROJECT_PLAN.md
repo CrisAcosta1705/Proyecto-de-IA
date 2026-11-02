@@ -33,15 +33,17 @@ Desarrollar una aplicacion Android que permita registrar asistencia estudiantil 
 - Ultralytics YOLO
 - PyTorch
 - NumPy
+- InsightFace / ArcFace
+- FastAPI
+- SQLite
 
 ### Aplicacion Android
 
 - Android Studio
 - Kotlin
 - CameraX
-- TensorFlow Lite
-- Room o SQLite
-- Firebase opcional
+- ML Kit para deteccion local de rostros
+- API HTTP local para reconocimiento
 
 ## Etapas
 
@@ -62,9 +64,10 @@ Estado actual: la app ya tiene una pantalla inicial con seleccion de clase, vist
 
 ### Etapa 3: IA en Android
 
-Usar IA local para analizar la camara del telefono.
+Usar la camara de Android y enviar capturas controladas al servicio Python.
 
-Estado actual: se usa ML Kit Face Detection para detectar y contar rostros en el dispositivo. TensorFlow Lite queda preparado para una etapa posterior con modelos personalizados.
+Estado actual: ML Kit cuenta rostros localmente y la app se comunica con la API
+para registrar embeddings y reconocer estudiantes.
 
 ### Etapa 4: Registro de asistencia
 
@@ -76,9 +79,15 @@ Guardar datos como:
 - Conteo detectado.
 - Observaciones.
 
+Estado actual: SQLite almacena estudiantes, sesiones y asistencias. Una
+restriccion unica impide registrar dos veces al mismo estudiante en una sesion.
+
 ### Etapa 5: Identificacion autorizada
 
 Agregar identificacion de estudiantes solo si existe consentimiento, control de privacidad y una forma segura de guardar credenciales.
+
+Estado actual: InsightFace genera embeddings ArcFace y las fotos no se conservan.
+Faltan cifrado, autenticacion, HTTPS y deteccion de suplantacion para un uso real.
 
 ## Consideraciones de privacidad
 

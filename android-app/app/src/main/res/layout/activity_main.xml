@@ -1,120 +1,738 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/rootLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/background">
 
     <LinearLayout
+        android:id="@+id/appContent"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="24dp">
+        android:background="@color/surface"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="18dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="10dp">
 
-        <TextView
-            android:id="@+id/titleText"
-            android:layout_width="match_parent"
+        <LinearLayout
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:text="@string/app_name"
-            android:textColor="@color/text_primary"
-            android:textSize="26sp"
-            android:textStyle="bold" />
+            android:layout_weight="1"
+            android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/subtitleText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/app_subtitle"
-            android:textColor="@color/text_secondary"
-            android:textSize="15sp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
-            android:text="@string/class_label"
-            android:textColor="@color/text_primary"
-            android:textSize="15sp"
-            android:textStyle="bold" />
-
-        <Spinner
-            android:id="@+id/classSpinner"
-            android:layout_width="match_parent"
-            android:layout_height="52dp"
-            android:layout_marginTop="8dp"
-            android:background="@drawable/input_background" />
-
-        <FrameLayout
-            android:id="@+id/cameraContainer"
-            android:layout_width="match_parent"
-            android:layout_height="220dp"
-            android:layout_marginTop="24dp">
-
-            <androidx.camera.view.PreviewView
-                android:id="@+id/previewView"
+            <TextView
+                android:id="@+id/screenTitleText"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:background="@drawable/camera_placeholder" />
+                android:layout_height="wrap_content"
+                android:text="@string/nav_attendance"
+                android:textColor="@color/text_primary"
+                android:textSize="22sp"
+                android:textStyle="bold" />
 
-            <com.proyectoia.asistencia.FaceBoxOverlay
-                android:id="@+id/faceOverlay"
+            <TextView
+                android:id="@+id/screenSubtitleText"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent" />
-        </FrameLayout>
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="@string/attendance_screen_subtitle"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+        </LinearLayout>
 
-        <Button
-            android:id="@+id/scanButton"
-            android:layout_width="match_parent"
-            android:layout_height="52dp"
-            android:layout_marginTop="20dp"
-            android:text="@string/start_scan" />
-
-        <TextView
-            android:id="@+id/countText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:gravity="center"
-            android:text="@string/people_count_initial"
-            android:textColor="@color/accent"
-            android:textSize="30sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/statusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="center"
-            android:text="@string/status_initial"
-            android:textColor="@color/text_secondary"
-            android:textSize="14sp" />
-
-        <Button
-            android:id="@+id/saveButton"
-            android:layout_width="match_parent"
-            android:layout_height="52dp"
-            android:layout_marginTop="20dp"
-            android:text="@string/save_attendance" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
-            android:text="@string/history_label"
-            android:textColor="@color/text_primary"
-            android:textSize="18sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/historyText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:background="@drawable/history_background"
-            android:minHeight="110dp"
-            android:padding="16dp"
-            android:textColor="@color/text_secondary"
-            android:textSize="14sp" />
+        <ProgressBar
+            android:id="@+id/analysisProgress"
+            style="?android:attr/progressBarStyleSmall"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:visibility="gone" />
     </LinearLayout>
-</ScrollView>
+
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/accent_soft"
+        android:gravity="center_vertical"
+        android:minHeight="42dp"
+        android:paddingHorizontal="18dp"
+        android:paddingVertical="8dp"
+        android:text="@string/status_initial"
+        android:textColor="@color/accent"
+        android:textSize="13sp" />
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <ScrollView
+            android:id="@+id/configurationScreen"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/server_configuration_description"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="14sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:background="@drawable/panel_background"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/processing_mode_label"
+                        android:textColor="@color/text_primary"
+                        android:textStyle="bold" />
+
+                    <Spinner
+                        android:id="@+id/processingModeSpinner"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:layout_marginTop="8dp"
+                        android:background="@drawable/input_background" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:text="@string/server_label"
+                        android:textColor="@color/text_primary"
+                        android:textStyle="bold" />
+
+                    <EditText
+                        android:id="@+id/serverUrlEditText"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:layout_marginTop="8dp"
+                        android:background="@drawable/input_background"
+                        android:hint="@string/server_url_default"
+                        android:inputType="textUri"
+                        android:paddingHorizontal="14dp"
+                        android:singleLine="true" />
+
+                    <Button
+                        android:id="@+id/syncStudentsButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:layout_marginTop="14dp"
+                        android:drawableStart="@android:drawable/ic_popup_sync"
+                        android:text="@string/sync_students" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="22dp"
+                    android:text="@string/recent_activity"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/historyText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/history_background"
+                    android:minHeight="96dp"
+                    android:padding="14dp"
+                    android:text="@string/no_recent_activity"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </ScrollView>
+
+        <ScrollView
+            android:id="@+id/attendanceScreen"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/panel_background"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/class_label"
+                        android:textColor="@color/text_primary"
+                        android:textStyle="bold" />
+
+                    <Spinner
+                        android:id="@+id/classSpinner"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:layout_marginTop="8dp"
+                        android:background="@drawable/input_background" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:text="@string/attendance_date_label"
+                        android:textColor="@color/text_primary"
+                        android:textStyle="bold" />
+
+                    <EditText
+                        android:id="@+id/attendanceDateEditText"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:layout_marginTop="8dp"
+                        android:background="@drawable/input_background"
+                        android:clickable="true"
+                        android:focusable="false"
+                        android:hint="@string/attendance_date_hint"
+                        android:inputType="date"
+                        android:paddingHorizontal="14dp"
+                        android:singleLine="true" />
+                </LinearLayout>
+
+                <FrameLayout
+                    android:id="@+id/cameraContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="260dp"
+                    android:layout_marginTop="16dp"
+                    android:background="@drawable/camera_placeholder">
+
+                    <androidx.camera.view.PreviewView
+                        android:id="@+id/previewView"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent" />
+
+                    <ImageView
+                        android:id="@+id/capturedImageView"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:contentDescription="@string/analyzed_photo"
+                        android:scaleType="centerCrop"
+                        android:visibility="gone" />
+
+                    <com.proyectoia.asistencia.FaceBoxOverlay
+                        android:id="@+id/faceOverlay"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent" />
+
+                    <TextView
+                        android:id="@+id/countText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="top|start"
+                        android:layout_margin="12dp"
+                        android:background="@drawable/camera_badge_background"
+                        android:paddingHorizontal="12dp"
+                        android:paddingVertical="7dp"
+                        android:text="@string/people_count_initial"
+                        android:textColor="@color/surface"
+                        android:textStyle="bold" />
+
+                    <ImageButton
+                        android:id="@+id/attendanceFullscreenCloseButton"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:layout_gravity="top|end"
+                        android:layout_margin="12dp"
+                        android:background="@drawable/camera_badge_background"
+                        android:contentDescription="@string/exit_fullscreen_camera"
+                        android:padding="12dp"
+                        android:src="@android:drawable/ic_menu_close_clear_cancel"
+                        app:tint="@color/surface"
+                        android:tooltipText="@string/exit_fullscreen_camera"
+                        android:visibility="gone" />
+
+                    <ImageButton
+                        android:id="@+id/attendanceFullscreenCaptureButton"
+                        android:layout_width="72dp"
+                        android:layout_height="72dp"
+                        android:layout_gravity="bottom|center_horizontal"
+                        android:layout_marginBottom="28dp"
+                        android:background="@drawable/camera_shutter_background"
+                        android:contentDescription="@string/capture_attendance_photo"
+                        android:padding="18dp"
+                        android:src="@android:drawable/ic_menu_camera"
+                        app:tint="@color/accent"
+                        android:tooltipText="@string/capture_attendance_photo"
+                        android:visibility="gone" />
+                </FrameLayout>
+
+                <Button
+                    android:id="@+id/cameraSwitchButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="10dp"
+                    android:drawableStart="@android:drawable/ic_menu_camera"
+                    android:text="@string/use_front_camera" />
+
+                <Button
+                    android:id="@+id/scanButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="54dp"
+                    android:layout_marginTop="10dp"
+                    android:backgroundTint="@color/accent"
+                    android:text="@string/start_scan"
+                    android:textColor="@color/surface"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/viewAttendanceButton"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
+                        android:text="@string/view_attendance" />
+
+                    <Button
+                        android:id="@+id/saveButton"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:text="@string/save_attendance" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+
+        <ScrollView
+            android:id="@+id/historyScreen"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/historyTotalStudentsText"
+                        android:layout_width="0dp"
+                        android:layout_height="88dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/stat_background"
+                        android:gravity="center"
+                        android:text="@string/stat_total_zero"
+                        android:textColor="@color/text_primary"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/historyMaleText"
+                        android:layout_width="0dp"
+                        android:layout_height="88dp"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/stat_background"
+                        android:gravity="center"
+                        android:text="@string/stat_male_zero"
+                        android:textColor="@color/text_primary"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/historyFemaleText"
+                        android:layout_width="0dp"
+                        android:layout_height="88dp"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/stat_background"
+                        android:gravity="center"
+                        android:text="@string/stat_female_zero"
+                        android:textColor="@color/text_primary"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/historyTotalListsText"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/attendance_lists_zero"
+                        android:textColor="@color/text_primary"
+                        android:textSize="17sp"
+                        android:textStyle="bold" />
+
+                    <ImageButton
+                        android:id="@+id/refreshHistoryButton"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:background="?android:attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="@string/refresh_history"
+                        android:src="@android:drawable/ic_popup_sync"
+                        android:tooltipText="@string/refresh_history" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/attendanceHistoryContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="vertical" />
+            </LinearLayout>
+        </ScrollView>
+
+        <ScrollView
+            android:id="@+id/studentsScreen"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/studentsCountText"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/registered_students_count_zero"
+                        android:textColor="@color/text_primary"
+                        android:textSize="17sp"
+                        android:textStyle="bold" />
+
+                    <ImageButton
+                        android:id="@+id/refreshStudentsButton"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:background="?android:attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="@string/refresh_students"
+                        android:src="@android:drawable/ic_popup_sync"
+                        android:tooltipText="@string/refresh_students" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="10dp"
+                    android:background="@color/table_header"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="10dp">
+
+                    <TextView
+                        android:layout_width="56dp"
+                        android:layout_height="wrap_content"
+                        android:text="@string/face_column"
+                        android:textColor="@color/text_primary"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/student_column"
+                        android:textColor="@color/text_primary"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="82dp"
+                        android:layout_height="wrap_content"
+                        android:text="@string/sex_column"
+                        android:textColor="@color/text_primary"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="48dp"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:text="@string/action_column"
+                        android:textColor="@color/text_primary"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/studentsTableContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+            </LinearLayout>
+        </ScrollView>
+
+        <ScrollView
+            android:id="@+id/registrationScreen"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/registration_step_one"
+                    android:textColor="@color/text_primary"
+                    android:textSize="17sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/studentNameEditText"
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/input_background"
+                    android:hint="@string/student_name_hint"
+                    android:inputType="textPersonName"
+                    android:maxLength="150"
+                    android:paddingHorizontal="14dp"
+                    android:singleLine="true" />
+
+                <EditText
+                    android:id="@+id/studentIdEditText"
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_background"
+                    android:hint="@string/student_id_hint"
+                    android:inputType="text"
+                    android:paddingHorizontal="14dp"
+                    android:singleLine="true" />
+
+                <Spinner
+                    android:id="@+id/studentSexSpinner"
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_background" />
+
+                <TextView
+                    android:id="@+id/registrationStepText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp"
+                    android:text="@string/registration_step_two"
+                    android:textColor="@color/text_primary"
+                    android:textSize="17sp"
+                    android:textStyle="bold" />
+
+                <ProgressBar
+                    android:id="@+id/registrationProgress"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="8dp"
+                    android:layout_marginTop="10dp"
+                    android:max="4"
+                    android:progress="0"
+                    android:progressTint="@color/accent" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/poseFrontStatus"
+                        style="@style/PoseStatus"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:text="@string/pose_front" />
+
+                    <TextView
+                        android:id="@+id/poseProfileStatus"
+                        style="@style/PoseStatus"
+                        android:layout_width="0dp"
+                        android:layout_marginStart="6dp"
+                        android:layout_weight="1"
+                        android:text="@string/pose_profile" />
+
+                    <TextView
+                        android:id="@+id/poseUpStatus"
+                        style="@style/PoseStatus"
+                        android:layout_width="0dp"
+                        android:layout_marginStart="6dp"
+                        android:layout_weight="1"
+                        android:text="@string/pose_up" />
+
+                    <TextView
+                        android:id="@+id/poseDownStatus"
+                        style="@style/PoseStatus"
+                        android:layout_width="0dp"
+                        android:layout_marginStart="6dp"
+                        android:layout_weight="1"
+                        android:text="@string/pose_down" />
+                </LinearLayout>
+
+                <FrameLayout
+                    android:id="@+id/registrationCameraContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="300dp"
+                    android:layout_marginTop="14dp"
+                    android:background="@drawable/camera_placeholder">
+
+                    <androidx.camera.view.PreviewView
+                        android:id="@+id/registrationPreviewView"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent" />
+
+                    <com.proyectoia.asistencia.FaceBoxOverlay
+                        android:id="@+id/registrationFaceOverlay"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent" />
+
+                    <TextView
+                        android:id="@+id/registrationInstructionText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="bottom"
+                        android:background="#D916202A"
+                        android:gravity="center"
+                        android:minHeight="58dp"
+                        android:padding="10dp"
+                        android:text="@string/registration_ready_instruction"
+                        android:textColor="@color/surface"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/registrationFullscreenStepText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="48dp"
+                        android:layout_gravity="top|start"
+                        android:layout_margin="12dp"
+                        android:background="@drawable/camera_badge_background"
+                        android:gravity="center"
+                        android:paddingHorizontal="14dp"
+                        android:text="@string/registration_fullscreen_initial"
+                        android:textColor="@color/surface"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
+
+                    <ImageButton
+                        android:id="@+id/registrationFullscreenCancelButton"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:layout_gravity="top|end"
+                        android:layout_margin="12dp"
+                        android:background="@drawable/camera_badge_background"
+                        android:contentDescription="@string/cancel_registration"
+                        android:padding="12dp"
+                        android:src="@android:drawable/ic_menu_close_clear_cancel"
+                        app:tint="@color/surface"
+                        android:tooltipText="@string/cancel_registration"
+                        android:visibility="gone" />
+                </FrameLayout>
+
+                <Button
+                    android:id="@+id/registerButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="54dp"
+                    android:layout_marginTop="12dp"
+                    android:backgroundTint="@color/accent"
+                    android:text="@string/start_guided_registration"
+                    android:textColor="@color/surface"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/cancelRegistrationButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/cancel_registration"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="72dp"
+        android:background="@color/surface"
+        android:orientation="horizontal"
+        android:paddingHorizontal="4dp"
+        android:paddingTop="4dp">
+
+        <Button
+            android:id="@+id/navConfigButton"
+            style="@style/BottomNavigationButton"
+            android:drawableTop="@android:drawable/ic_menu_preferences"
+            android:text="@string/nav_config" />
+
+        <Button
+            android:id="@+id/navAttendanceButton"
+            style="@style/BottomNavigationButton"
+            android:drawableTop="@android:drawable/ic_menu_camera"
+            android:text="@string/nav_attendance" />
+
+        <Button
+            android:id="@+id/navHistoryButton"
+            style="@style/BottomNavigationButton"
+            android:drawableTop="@android:drawable/ic_menu_recent_history"
+            android:text="@string/nav_history" />
+
+        <Button
+            android:id="@+id/navStudentsButton"
+            style="@style/BottomNavigationButton"
+            android:drawableTop="@android:drawable/ic_menu_agenda"
+            android:text="@string/nav_students" />
+
+        <Button
+            android:id="@+id/navRegistrationButton"
+            style="@style/BottomNavigationButton"
+            android:drawableTop="@android:drawable/ic_input_add"
+            android:text="@string/nav_registration" />
+    </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

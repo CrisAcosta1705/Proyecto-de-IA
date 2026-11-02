@@ -1,0 +1,277 @@
+import argparse
+from datetime import date
+import os
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
+import uvicorn
+
+from asistencia_ia.discovery import DISCOVERY_PORT, DiscoveryResponder
+from asistencia_ia.recognition import InsightFaceExtractor
+from asistencia_ia.services.attendance import AttendanceService, FaceProcessingError
+from asistencia_ia.storage import AttendanceAlreadyExistsError, AttendanceDatabase
+
+
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+class SessionRequest(BaseModel):
+    course: str = Field(min_length=2, max_length=100)
+    attendance_date: date = Field(default_factory=date.today)
+    overwrite: bool = False
+
+
+class StudentSexRequest(BaseModel):
+    sex: str
+
+
+class StudentProfileRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=150)
+    sex: str
+
+
+async def _read_image(upload: UploadFile) -> bytes:
+    if upload.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(415, "Solo se aceptan imagenes JPEG, PNG o WebP.")
+    content = await upload.read(MAX_IMAGE_BYTES + 1)
+    if len(content) > MAX_IMAGE_BYTES:
+        raise HTTPException(413, "La imagen supera el limite de 10 MB.")
+    return content
+
+
+def create_app(
+    database_path: Path | str | None = None,
+    extractor=None,
+    similarity_threshold: float | None = None,
+) -> FastAPI:
+    db_path = Path(
+        database_path
+        or os.environ.get("ASISTENCIA_DB", "data/processed/asistencia.db")
+    )
+    threshold = (
+        similarity_threshold
+        if similarity_threshold is not None
+        else float(os.environ.get("FACE_SIMILARITY_THRESHOLD", "0.45"))
+    )
+    database = AttendanceDatabase(db_path)
+    database.initialize()
+    face_extractor = extractor or InsightFaceExtractor(
+        model_name=os.environ.get("INSIGHTFACE_MODEL", "buffalo_l"),
+        model_root=Path(os.environ.get("INSIGHTFACE_ROOT", "models/insightface")),
+    )
+    service = AttendanceService(database, face_extractor, threshold)
+
+    app = FastAPI(
+        title="Asistencia estudiantil con IA",
+        version="0.7.0",
+        description="API local para registro facial y asistencia sin duplicados.",
+    )
+    app.state.database = database
+    app.state.extractor = face_extractor
+    app.state.service = service
+
+    @app.get("/health")
+    def health() -> dict[str, object]:
+        return {
+            "status": "ok",
+            "model_loaded": bool(getattr(face_extractor, "loaded", True)),
+            "database": str(db_path),
+        }
+
+    @app.get("/students")
+    def students() -> list[dict[str, object]]:
+        return database.list_students()
+
+    @app.get("/students/{student_id}/photo")
+    def student_photo(student_id: str) -> Response:
+        stored_photo = database.student_photo(student_id.strip())
+        if stored_photo is None:
+            raise HTTPException(404, "El estudiante no tiene una fotografia registrada.")
+        content, media_type = stored_photo
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.patch("/students/{student_id}/sex")
+    def update_student_sex(
+        student_id: str,
+        request: StudentSexRequest,
+    ) -> dict[str, object]:
+        sex = request.sex.strip().upper()
+        if sex not in {"MASCULINO", "FEMENINO"}:
+            raise HTTPException(422, "El sexo debe ser MASCULINO o FEMENINO.")
+        name = database.update_student_sex(student_id.strip(), sex)
+        if name is None:
+            raise HTTPException(404, "El estudiante no existe.")
+        return {"student_id": student_id.strip(), "name": name, "sex": sex}
+
+    @app.patch("/students/{student_id}")
+    def update_student_profile(
+        student_id: str,
+        request: StudentProfileRequest,
+    ) -> dict[str, str]:
+        clean_id = student_id.strip()
+        name = request.name.strip()
+        sex = request.sex.strip().upper()
+        if len(name) < 2:
+            raise HTTPException(422, "El nombre debe contener al menos 2 caracteres.")
+        if sex not in {"MASCULINO", "FEMENINO"}:
+            raise HTTPException(422, "El sexo debe ser MASCULINO o FEMENINO.")
+        profile = database.update_student_profile(clean_id, name, sex)
+        if profile is None:
+            raise HTTPException(404, "El estudiante no existe.")
+        return profile
+
+    @app.delete("/students/{student_id}/recognition")
+    def delete_student_recognition(student_id: str) -> dict[str, object]:
+        name = database.clear_student_recognition(student_id.strip())
+        if name is None:
+            raise HTTPException(404, "El estudiante no existe.")
+        return {
+            "student_id": student_id.strip(),
+            "name": name,
+            "recognition_deleted": True,
+        }
+
+    @app.delete("/students/{student_id}")
+    def delete_student(student_id: str) -> dict[str, object]:
+        clean_id = student_id.strip()
+        name = database.delete_student(clean_id)
+        if name is None:
+            raise HTTPException(404, "El estudiante no existe.")
+        return {
+            "student_id": clean_id,
+            "name": name,
+            "deleted": True,
+        }
+
+    @app.post("/students/register")
+    async def register_student(
+        student_id: str = Form(...),
+        name: str = Form(...),
+        sex: str = Form("NO_ESPECIFICADO"),
+        replace_embeddings: bool = Form(True),
+        images: list[UploadFile] = File(...),
+    ) -> dict[str, object]:
+        try:
+            contents = [await _read_image(image) for image in images]
+            mime_type = images[0].content_type or "image/jpeg"
+            added = await run_in_threadpool(
+                service.register_student,
+                student_id,
+                name,
+                contents,
+                replace_embeddings,
+                mime_type,
+                sex,
+            )
+            return {
+                "student_id": student_id.strip(),
+                "name": name.strip(),
+                "sex": sex.strip().upper(),
+                "embeddings_added": added,
+                "photo_stored": True,
+            }
+        except FaceProcessingError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @app.post("/sessions")
+    def create_session(request: SessionRequest) -> dict[str, object]:
+        try:
+            selected_date = request.attendance_date.isoformat()
+            session_id = service.create_session(
+                request.course,
+                selected_date,
+                request.overwrite,
+            )
+            return {
+                "session_id": session_id,
+                "course": request.course.strip(),
+                "attendance_date": selected_date,
+                "overwritten": request.overwrite,
+            }
+        except AttendanceAlreadyExistsError as error:
+            raise HTTPException(409, str(error)) from error
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @app.get("/attendance/status")
+    def attendance_status(
+        course: str,
+        attendance_date: date,
+    ) -> dict[str, object]:
+        return service.attendance_status(course, attendance_date.isoformat())
+
+    @app.get("/attendance/report")
+    def attendance_report(
+        course: str,
+        attendance_date: date,
+    ) -> dict[str, object]:
+        return service.attendance_report(course, attendance_date.isoformat())
+
+    @app.get("/attendance/summaries")
+    def attendance_summaries() -> list[dict[str, object]]:
+        return database.attendance_summaries()
+
+    @app.post("/sessions/{session_id}/recognize")
+    async def recognize(
+        session_id: int,
+        image: UploadFile = File(...),
+    ) -> dict[str, object]:
+        try:
+            content = await _read_image(image)
+            return await run_in_threadpool(service.recognize, session_id, content)
+        except LookupError as error:
+            raise HTTPException(404, str(error)) from error
+        except (FaceProcessingError, ValueError) as error:
+            raise HTTPException(422, str(error)) from error
+
+    @app.get("/sessions/{session_id}/attendance")
+    def attendance(session_id: int) -> dict[str, object]:
+        session = database.get_session(session_id)
+        if session is None:
+            raise HTTPException(404, "La sesion de asistencia no existe.")
+        records = database.attendance(session_id)
+        return {"session": session, "attendance": records, "count": len(records)}
+
+    @app.post("/sessions/{session_id}/finish")
+    def finish_session(session_id: int) -> dict[str, object]:
+        if not database.finish_session(session_id):
+            raise HTTPException(404, "La sesion de asistencia no existe.")
+        return {"session_id": session_id, "finished": True}
+
+    return app
+
+
+app = create_app()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Servidor local de asistencia con IA.")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--discovery-port",
+        type=int,
+        default=DISCOVERY_PORT,
+        help="Puerto UDP utilizado por la aplicacion para descubrir la API.",
+    )
+    args = parser.parse_args()
+    discovery = DiscoveryResponder(args.port, args.discovery_port)
+    try:
+        discovery.start()
+        print(
+            f"Descubrimiento automatico disponible en UDP {discovery.discovery_port}.",
+            flush=True,
+        )
+        uvicorn.run(app, host=args.host, port=args.port)
+    finally:
+        discovery.stop()
+
+
+if __name__ == "__main__":
+    main()

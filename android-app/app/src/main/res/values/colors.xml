@@ -6,4 +6,9 @@
     <color name="text_primary">#17202A</color>
     <color name="text_secondary">#5D6978</color>
     <color name="accent">#176B5B</color>
+    <color name="accent_soft">#E0F1ED</color>
+    <color name="border">#D6DDE5</color>
+    <color name="table_header">#E9EDF2</color>
+    <color name="success_soft">#DCEFE7</color>
+    <color name="danger">#B3261E</color>
 </resources>

@@ -1,11 +1,31 @@
 .venv/
 __pycache__/
 *.py[cod]
+*.egg-info/
 *.log
 runs/
-data/
 videos/
 yolov*.pt
+
+# Datos privados: solo se versiona la estructura vacia y su documentacion.
+data/**
+!data/README.md
+!data/raw/
+!data/raw/classroom/
+!data/raw/classroom/.gitkeep
+!data/raw/registered_students/
+!data/raw/registered_students/.gitkeep
+!data/processed/
+!data/processed/.gitkeep
+!data/test/
+!data/test/classroom_images/
+!data/test/classroom_images/.gitkeep
+!data/test/recognition_images/
+!data/test/recognition_images/.gitkeep
+
+# Pesos y artefactos de modelos.
+models/**
+!models/README.md
 
 # Android
 android-app/.gradle/

@@ -4,10 +4,10 @@ from datetime import datetime
 from pathlib import Path
 
 import cv2
-from ultralytics import YOLO
 
-
-PERSON_CLASS_ID = 0
+from asistencia_ia.detection import YoloPersonDetector
+from asistencia_ia.domain import PersonDetection
+from asistencia_ia.pipeline import ClassroomPipeline
 
 
 def parse_args():
@@ -81,12 +81,13 @@ def open_csv_writer(csv_path):
     return file, writer
 
 
-def draw_detection(frame, box, confidence):
-    x1, y1, x2, y2 = map(int, box.xyxy[0])
+def draw_detection(frame, detection: PersonDetection):
+    box = detection.box
+    x1, y1, x2, y2 = box.x1, box.y1, box.x2, box.y2
     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 190, 80), 2)
     cv2.putText(
         frame,
-        f"Persona {confidence:.2f}",
+        f"Persona {detection.confidence:.2f}",
         (x1, max(y1 - 8, 20)),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
@@ -99,7 +100,9 @@ def main():
     args = parse_args()
     capture_source = get_capture_source(args)
 
-    model = YOLO(args.model)
+    pipeline = ClassroomPipeline(
+        YoloPersonDetector(args.model, min_confidence=args.confidence)
+    )
     cap = cv2.VideoCapture(capture_source)
 
     if not cap.isOpened():
@@ -118,17 +121,11 @@ def main():
                 break
 
             frame_number += 1
-            results = model(frame, verbose=False)
-            person_count = 0
+            analysis = pipeline.analyze(frame)
+            person_count = analysis.person_count
 
-            for result in results:
-                for box in result.boxes:
-                    class_id = int(box.cls[0])
-                    confidence = float(box.conf[0])
-
-                    if class_id == PERSON_CLASS_ID and confidence >= args.confidence:
-                        person_count += 1
-                        draw_detection(frame, box, confidence)
+            for detection in analysis.person_detections:
+                draw_detection(frame, detection)
 
             cv2.putText(
                 frame,

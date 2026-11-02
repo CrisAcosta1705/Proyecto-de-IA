@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingStart="24dp"
+    android:paddingTop="8dp"
+    android:paddingEnd="24dp"
+    android:paddingBottom="8dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/update_face_references_method"
+        android:textColor="@color/text_secondary"
+        android:textSize="15sp" />
+
+    <Button
+        android:id="@+id/startFaceRouteOptionButton"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_marginTop="18dp"
+        android:drawableStart="@android:drawable/ic_menu_camera"
+        android:text="@string/start_face_route_option" />
+
+    <Button
+        android:id="@+id/chooseSavedPhotosOptionButton"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_marginTop="8dp"
+        android:drawableStart="@android:drawable/ic_menu_gallery"
+        android:text="@string/choose_saved_photos_option" />
+
+</LinearLayout>
