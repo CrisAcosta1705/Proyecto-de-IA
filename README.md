@@ -156,6 +156,57 @@ Abre `android-app` en Android Studio, conecta el telefono y ejecuta el modulo
 android-app/app/build/outputs/apk/debug/app-debug.apk
 ```
 
+## Generar y publicar el APK desde GitHub
+
+El workflow `.github/workflows/android-apk.yml` compila la aplicacion sin
+necesidad de Android Studio:
+
+- Cada cambio de Android enviado a `main` genera un APK descargable durante 30
+  dias desde `Actions > Generar APK Android > Artifacts`.
+- Una etiqueta cuyo nombre comience con `v`, por ejemplo `v0.1.0`, crea una
+  publicacion permanente en la seccion `Releases` y adjunta el APK junto con su
+  suma SHA-256.
+- El nombre de la etiqueta se usa como `versionName` y el numero de ejecucion
+  de GitHub aumenta automaticamente el `versionCode` para permitir futuras
+  actualizaciones.
+- Si no hay secretos de firma, GitHub genera un APK `debug` instalable para
+  pruebas. Si los cuatro secretos estan configurados, genera un APK `release`
+  firmado de forma estable.
+
+Para publicar la version actual:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Para una firma estable, genera una clave una sola vez y mantenla fuera del
+repositorio:
+
+```powershell
+keytool -genkeypair -v `
+  -keystore "$HOME\.android\asistencia-ia-release.jks" `
+  -alias asistencia-ia `
+  -keyalg RSA -keysize 2048 -validity 10000
+
+[Convert]::ToBase64String(
+  [IO.File]::ReadAllBytes("$HOME\.android\asistencia-ia-release.jks")
+) | Set-Clipboard
+```
+
+En `Settings > Secrets and variables > Actions` del repositorio se deben crear:
+
+| Secreto | Contenido |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | Texto Base64 copiado por PowerShell |
+| `ANDROID_KEYSTORE_PASSWORD` | Contrasena del almacen de claves |
+| `ANDROID_KEY_ALIAS` | Alias de la clave, por ejemplo `asistencia-ia` |
+| `ANDROID_KEY_PASSWORD` | Contrasena de la clave |
+
+La clave y sus contrasenas deben conservarse para poder instalar futuras
+actualizaciones sobre una version ya distribuida. Los archivos APK, AAB, JKS y
+keystore permanecen excluidos de Git.
+
 ## Conteo con YOLO
 
 ```powershell

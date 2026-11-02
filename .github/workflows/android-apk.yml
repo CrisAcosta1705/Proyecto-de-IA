@@ -1,0 +1,140 @@
+name: Generar APK Android
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    paths:
+      - "android-app/**"
+      - ".github/workflows/android-apk.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "android-app/**"
+      - ".github/workflows/android-apk.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Compilar APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configurar version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version_name="${GITHUB_REF_NAME#v}"
+          else
+            version_name="0.1.0-dev.$GITHUB_RUN_NUMBER"
+          fi
+          {
+            echo "ANDROID_VERSION_CODE=$GITHUB_RUN_NUMBER"
+            echo "ANDROID_VERSION_NAME=$version_name"
+          } >> "$GITHUB_ENV"
+          echo "name=$version_name" >> "$GITHUB_OUTPUT"
+
+      - name: Preparar firma
+        id: signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          configured=0
+          for value in "$KEYSTORE_BASE64" "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD"; do
+            if [[ -n "$value" ]]; then
+              configured=$((configured + 1))
+            fi
+          done
+
+          if [[ "$configured" -ne 0 && "$configured" -ne 4 ]]; then
+            echo "La firma esta incompleta. Configura los cuatro secretos ANDROID_* o elimina los valores parciales."
+            exit 1
+          fi
+
+          if [[ "$configured" -eq 4 ]]; then
+            keystore_path="$GITHUB_WORKSPACE/android-app/app/release-signing.jks"
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+            {
+              echo "ANDROID_KEYSTORE_PATH=$keystore_path"
+              echo "ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "ANDROID_KEY_ALIAS=$KEY_ALIAS"
+              echo "ANDROID_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "task=assembleRelease" >> "$GITHUB_OUTPUT"
+            echo "source=android-app/app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_OUTPUT"
+            echo "suffix=" >> "$GITHUB_OUTPUT"
+            echo "type=release firmado" >> "$GITHUB_OUTPUT"
+          else
+            echo "task=assembleDebug" >> "$GITHUB_OUTPUT"
+            echo "source=android-app/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
+            echo "suffix=-debug" >> "$GITHUB_OUTPUT"
+            echo "type=debug instalable" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compilar aplicacion
+        working-directory: android-app
+        run: ./gradlew --no-daemon :app:${{ steps.signing.outputs.task }}
+
+      - name: Preparar archivo descargable
+        id: package
+        shell: bash
+        run: |
+          mkdir -p dist
+          version="${GITHUB_REF_NAME//\//-}"
+          apk_name="AsistenciaIA-${version}${{ steps.signing.outputs.suffix }}.apk"
+          cp "${{ steps.signing.outputs.source }}" "dist/$apk_name"
+          (
+            cd dist
+            sha256sum "$apk_name" > "$apk_name.sha256"
+          )
+          echo "apk_name=$apk_name" >> "$GITHUB_OUTPUT"
+          {
+            echo "### APK generado"
+            echo "- Archivo: \`$apk_name\`"
+            echo "- Version: ${{ steps.version.outputs.name }} ($GITHUB_RUN_NUMBER)"
+            echo "- Tipo: ${{ steps.signing.outputs.type }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Guardar APK como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.apk_name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publicar GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Asistencia IA ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dist/*
+
+      - name: Eliminar clave temporal
+        if: always()
+        shell: bash
+        run: rm -f android-app/app/release-signing.jks
