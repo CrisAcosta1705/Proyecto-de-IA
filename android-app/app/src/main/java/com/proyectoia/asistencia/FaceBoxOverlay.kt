@@ -12,7 +12,9 @@ import android.view.View
 enum class FaceBoxState {
     DETECTED,
     RECOGNIZED,
-    UNKNOWN
+    UNKNOWN,
+    GUIDANCE_VALID,
+    GUIDANCE_INVALID
 }
 
 data class FaceOverlayBox(
@@ -106,8 +108,10 @@ class FaceBoxOverlay @JvmOverloads constructor(
 
     private fun colorFor(state: FaceBoxState): Int = when (state) {
         FaceBoxState.DETECTED -> Color.rgb(23, 107, 91)
-        FaceBoxState.RECOGNIZED -> Color.rgb(22, 145, 69)
-        FaceBoxState.UNKNOWN -> Color.rgb(198, 40, 40)
+        FaceBoxState.RECOGNIZED,
+        FaceBoxState.GUIDANCE_VALID -> Color.rgb(22, 145, 69)
+        FaceBoxState.UNKNOWN,
+        FaceBoxState.GUIDANCE_INVALID -> Color.rgb(198, 40, 40)
     }
 
     private fun drawLabel(canvas: Canvas, box: RectF, label: String, color: Int) {

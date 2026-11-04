@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.media.ExifInterface
@@ -79,6 +80,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
+import kotlin.math.sqrt
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -99,6 +101,10 @@ class MainActivity : ComponentActivity() {
         private const val GUIDED_STABLE_FRAMES = 4
         private const val REQUIRED_REFERENCE_PHOTOS = 4
         private const val MAX_GALLERY_IMAGE_BYTES = 10 * 1024 * 1024
+        private const val MIN_CAPTURE_BRIGHTNESS = 48f
+        private const val MAX_CAPTURE_BRIGHTNESS = 218f
+        private const val MIN_CAPTURE_CONTRAST = 17f
+        private const val MIN_CAPTURE_SHARPNESS = 4f
     }
 
     private lateinit var classSpinner: Spinner
@@ -115,6 +121,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var analysisProgress: ProgressBar
     private lateinit var previewView: PreviewView
     private lateinit var registrationPreviewView: PreviewView
+    private lateinit var registrationCapturedImageView: ImageView
     private lateinit var attendanceCameraContainer: FrameLayout
     private lateinit var registrationCameraContainer: FrameLayout
     private lateinit var capturedImageView: ImageView
@@ -163,6 +170,7 @@ class MainActivity : ComponentActivity() {
     private var fullscreenOriginalIndex = -1
     private var fullscreenOriginalLayoutParams: ViewGroup.LayoutParams? = null
     @Volatile private var guidedRegistrationActive = false
+    @Volatile private var guidedVerificationActive = false
     @Volatile private var guidedPoseIndex = -1
     private var guidedStableFrames = 0
     private val guidedSamples = mutableListOf<GuidedRegistrationSample>()
@@ -234,7 +242,20 @@ class MainActivity : ComponentActivity() {
 
     private data class LocalFaceExtraction(
         val bitmap: Bitmap,
-        val samples: List<LocalFaceSample>
+        val samples: List<LocalFaceSample>,
+        val faces: List<Face>
+    )
+
+    private data class CaptureQuality(
+        val brightness: Float,
+        val contrast: Float,
+        val sharpness: Float
+    )
+
+    private data class GuidedFrameEvaluation(
+        val accepted: Boolean,
+        val message: String,
+        val overlayLabel: String
     )
 
     private data class GalleryProcessingUi(
@@ -355,6 +376,7 @@ class MainActivity : ComponentActivity() {
         analysisProgress = findViewById(R.id.analysisProgress)
         previewView = findViewById(R.id.previewView)
         registrationPreviewView = findViewById(R.id.registrationPreviewView)
+        registrationCapturedImageView = findViewById(R.id.registrationCapturedImageView)
         attendanceCameraContainer = findViewById(R.id.cameraContainer)
         registrationCameraContainer = findViewById(R.id.registrationCameraContainer)
         capturedImageView = findViewById(R.id.capturedImageView)
@@ -472,7 +494,7 @@ class MainActivity : ComponentActivity() {
         attendanceDateEditText.setOnClickListener { showAttendanceDatePicker() }
 
         findViewById<Button>(R.id.registerButton).setOnClickListener {
-            startGuidedRegistration()
+            showGuidedRegistrationConditions()
         }
         cancelRegistrationButton.setOnClickListener { cancelGuidedRegistration() }
         registrationFullscreenCancelButton.setOnClickListener {
@@ -890,17 +912,44 @@ class MainActivity : ComponentActivity() {
         val analyzedWidth = if (rotated) imageProxy.height else imageProxy.width
         val analyzedHeight = if (rotated) imageProxy.width else imageProxy.height
         val mirrorPreview = lensFacing == CameraSelector.LENS_FACING_FRONT
+        val captureQuality = measureFrameQuality(imageProxy)
         faceDetector.process(image)
             .addOnSuccessListener { faces ->
                 val boxes = faces.map { it.boundingBox }
+                val guidedPose = when {
+                    guidedVerificationActive -> GuidedPose.FRONT
+                    guidedRegistrationActive -> GuidedPose.entries.getOrNull(guidedPoseIndex)
+                    else -> null
+                }
+                val guidedEvaluation = guidedPose?.let { pose ->
+                    evaluateGuidedFrame(
+                        faces,
+                        analyzedWidth,
+                        analyzedHeight,
+                        captureQuality,
+                        pose,
+                        verification = guidedVerificationActive
+                    )
+                }
                 runOnUiThread {
                     if (activeSection == AppSection.REGISTRATION) {
-                        registrationFaceOverlay.setFaces(
-                            boxes,
-                            analyzedWidth,
-                            analyzedHeight,
-                            mirrorPreview
-                        )
+                        if (registrationCapturedImageView.visibility == View.VISIBLE) {
+                            // Keep the frozen verification result and its colored box visible.
+                        } else if (guidedEvaluation != null) {
+                            registrationFaceOverlay.setResults(
+                                guidedOverlayResults(faces, guidedEvaluation),
+                                analyzedWidth,
+                                analyzedHeight,
+                                mirrorPreview
+                            )
+                        } else {
+                            registrationFaceOverlay.setFaces(
+                                boxes,
+                                analyzedWidth,
+                                analyzedHeight,
+                                mirrorPreview
+                            )
+                        }
                     } else if (activeSection == AppSection.ATTENDANCE) {
                         countText.text = getString(R.string.people_count, faces.size)
                         if (!isShowingRecognitionResult.get()) {
@@ -913,8 +962,16 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                if (activeSection == AppSection.REGISTRATION && guidedRegistrationActive) {
-                    processGuidedRegistrationFrame(faces, analyzedWidth, analyzedHeight)
+                if (
+                    activeSection == AppSection.REGISTRATION &&
+                    guidedRegistrationActive &&
+                    guidedEvaluation != null
+                ) {
+                    if (guidedVerificationActive) {
+                        processGuidedVerificationFrame(guidedEvaluation)
+                    } else {
+                        processGuidedRegistrationFrame(guidedEvaluation)
+                    }
                 }
             }
             .addOnFailureListener { error -> showStatus(error.message ?: "Error facial.") }
@@ -922,6 +979,25 @@ class MainActivity : ComponentActivity() {
                 isAnalyzing.set(false)
                 imageProxy.close()
             }
+    }
+
+    private fun showGuidedRegistrationConditions() {
+        if (guidedRegistrationActive || isGuidedCaptureRunning.get()) return
+        val studentId = studentIdEditText.text.toString().trim()
+        val name = studentNameEditText.text.toString().trim()
+        val sex = selectedStudentSex()
+        if (studentId.isBlank() || name.length < 2 || sex == null) {
+            showStatus(getString(R.string.invalid_registration))
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.registration_conditions_title)
+            .setMessage(R.string.registration_conditions_message)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.registration_conditions_start) { _, _ ->
+                startGuidedRegistration()
+            }
+            .show()
     }
 
     private fun startGuidedRegistration() {
@@ -944,7 +1020,10 @@ class MainActivity : ComponentActivity() {
         guidedPoseIndex = 0
         guidedStableFrames = 0
         guidedRegistrationActive = true
+        guidedVerificationActive = false
         isGuidedCaptureRunning.set(false)
+        registrationCapturedImageView.setImageDrawable(null)
+        registrationCapturedImageView.visibility = View.GONE
         setGuidedProfileFieldsEnabled(false)
         cancelRegistrationButton.visibility = View.VISIBLE
         registrationProgress.progress = 0
@@ -960,6 +1039,7 @@ class MainActivity : ComponentActivity() {
 
     private fun cancelGuidedRegistration() {
         guidedRegistrationActive = false
+        guidedVerificationActive = false
         guidedPoseIndex = -1
         guidedStableFrames = 0
         guidedSamples.clear()
@@ -970,6 +1050,8 @@ class MainActivity : ComponentActivity() {
         registrationProgress.progress = 0
         registrationStepText.setText(R.string.registration_step_two)
         registrationInstructionText.setText(R.string.registration_ready_instruction)
+        registrationCapturedImageView.setImageDrawable(null)
+        registrationCapturedImageView.visibility = View.GONE
         registrationFaceOverlay.clear()
         poseStatusViews.forEach {
             it.setBackgroundResource(R.drawable.pose_pending_background)
@@ -1004,34 +1086,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun processGuidedRegistrationFrame(
-        faces: List<Face>,
-        imageWidth: Int,
-        imageHeight: Int
-    ) {
+    private fun processGuidedRegistrationFrame(evaluation: GuidedFrameEvaluation) {
         if (!guidedRegistrationActive || isGuidedCaptureRunning.get()) return
         val pose = GuidedPose.entries.getOrNull(guidedPoseIndex) ?: return
-        val face = faces.singleOrNull()
-        val minimumSide = minOf(imageWidth, imageHeight) * 0.18f
-        if (
-            face == null ||
-            face.boundingBox.width() < minimumSide ||
-            face.boundingBox.height() < minimumSide
-        ) {
+        if (!evaluation.accepted) {
             guidedStableFrames = 0
-            runOnUiThread { registrationInstructionText.setText(pose.instructionRes) }
-            return
-        }
-
-        if (!matchesGuidedPose(face, pose)) {
-            guidedStableFrames = 0
-            runOnUiThread { registrationInstructionText.setText(pose.instructionRes) }
+            runOnUiThread { registrationInstructionText.text = evaluation.message }
             return
         }
 
         guidedStableFrames++
         runOnUiThread {
-            registrationInstructionText.setText(R.string.registration_hold_instruction)
+            registrationInstructionText.text = getString(
+                R.string.registration_hold_quality_instruction,
+                guidedStableFrames,
+                GUIDED_STABLE_FRAMES
+            )
         }
         if (guidedStableFrames < GUIDED_STABLE_FRAMES) return
         guidedStableFrames = 0
@@ -1049,6 +1119,172 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun evaluateGuidedFrame(
+        faces: List<Face>,
+        imageWidth: Int,
+        imageHeight: Int,
+        quality: CaptureQuality,
+        pose: GuidedPose,
+        verification: Boolean
+    ): GuidedFrameEvaluation {
+        if (faces.isEmpty()) {
+            return GuidedFrameEvaluation(
+                false,
+                getString(R.string.registration_no_face_quality),
+                getString(R.string.registration_overlay_no_face)
+            )
+        }
+        if (faces.size != 1) {
+            return GuidedFrameEvaluation(
+                false,
+                getString(R.string.registration_single_face_required),
+                getString(R.string.registration_overlay_multiple_faces)
+            )
+        }
+        val face = faces.single()
+        val minimumSide = minOf(imageWidth, imageHeight) * 0.18f
+        if (
+            face.boundingBox.width() < minimumSide ||
+            face.boundingBox.height() < minimumSide
+        ) {
+            return GuidedFrameEvaluation(
+                false,
+                getString(R.string.registration_move_closer),
+                getString(R.string.registration_overlay_too_far)
+            )
+        }
+        qualityProblem(quality)?.let { problem ->
+            return problem
+        }
+        if (!matchesGuidedPose(face, pose)) {
+            return GuidedFrameEvaluation(
+                false,
+                getString(
+                    if (verification) {
+                        R.string.registration_verification_front_instruction
+                    } else {
+                        pose.instructionRes
+                    }
+                ),
+                getString(R.string.registration_overlay_wrong_pose)
+            )
+        }
+        return GuidedFrameEvaluation(
+            true,
+            getString(R.string.registration_pose_quality_ready),
+            getString(R.string.registration_overlay_correct_pose)
+        )
+    }
+
+    private fun qualityProblem(quality: CaptureQuality): GuidedFrameEvaluation? {
+        return when {
+            quality.brightness < MIN_CAPTURE_BRIGHTNESS -> GuidedFrameEvaluation(
+                false,
+                getString(R.string.registration_quality_dark),
+                getString(R.string.registration_overlay_dark)
+            )
+            quality.brightness > MAX_CAPTURE_BRIGHTNESS -> GuidedFrameEvaluation(
+                false,
+                getString(R.string.registration_quality_bright),
+                getString(R.string.registration_overlay_bright)
+            )
+            quality.contrast < MIN_CAPTURE_CONTRAST -> GuidedFrameEvaluation(
+                false,
+                getString(R.string.registration_quality_contrast),
+                getString(R.string.registration_overlay_low_contrast)
+            )
+            quality.sharpness < MIN_CAPTURE_SHARPNESS -> GuidedFrameEvaluation(
+                false,
+                getString(R.string.registration_quality_blurry),
+                getString(R.string.registration_overlay_blurry)
+            )
+            else -> null
+        }
+    }
+
+    private fun guidedOverlayResults(
+        faces: List<Face>,
+        evaluation: GuidedFrameEvaluation
+    ): List<FaceOverlayBox> {
+        val state = if (evaluation.accepted) {
+            FaceBoxState.GUIDANCE_VALID
+        } else {
+            FaceBoxState.GUIDANCE_INVALID
+        }
+        return faces.mapIndexed { index, face ->
+            FaceOverlayBox(
+                Rect(face.boundingBox),
+                state,
+                if (index == 0) evaluation.overlayLabel else null
+            )
+        }
+    }
+
+    private fun measureFrameQuality(imageProxy: ImageProxy): CaptureQuality {
+        val plane = imageProxy.planes.firstOrNull()
+            ?: return CaptureQuality(0f, 0f, 0f)
+        val buffer = plane.buffer.duplicate()
+        val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
+        val limit = buffer.limit()
+        return summarizeQuality(imageProxy.width, imageProxy.height) { x, y ->
+            val index = y * rowStride + x * pixelStride
+            if (index in 0 until limit) buffer.get(index).toInt() and 0xFF else 0
+        }
+    }
+
+    private fun measureBitmapQuality(bitmap: Bitmap, faceBounds: Rect): CaptureQuality {
+        val region = Rect(faceBounds)
+        if (!region.intersect(0, 0, bitmap.width, bitmap.height) || region.isEmpty) {
+            return CaptureQuality(0f, 0f, 0f)
+        }
+        return summarizeQuality(region.width(), region.height()) { x, y ->
+            val pixel = bitmap.getPixel(region.left + x, region.top + y)
+            (
+                Color.red(pixel) * 77 +
+                    Color.green(pixel) * 150 +
+                    Color.blue(pixel) * 29
+                ) shr 8
+        }
+    }
+
+    private fun summarizeQuality(
+        width: Int,
+        height: Int,
+        luminanceAt: (Int, Int) -> Int
+    ): CaptureQuality {
+        if (width < 2 || height < 2) return CaptureQuality(0f, 0f, 0f)
+        val step = (minOf(width, height) / 96).coerceAtLeast(2)
+        var count = 0
+        var sum = 0.0
+        var squaredSum = 0.0
+        var edgeCount = 0
+        var edgeSum = 0.0
+        var y = 0
+        while (y < height - 1) {
+            var x = 0
+            while (x < width - 1) {
+                val value = luminanceAt(x, y).coerceIn(0, 255)
+                sum += value
+                squaredSum += value.toDouble() * value.toDouble()
+                count++
+                edgeSum += abs(value - luminanceAt(x + 1, y))
+                edgeSum += abs(value - luminanceAt(x, y + 1))
+                edgeCount += 2
+                x += step
+            }
+            y += step
+        }
+        if (count == 0) return CaptureQuality(0f, 0f, 0f)
+        val mean = sum / count
+        val variance = (squaredSum / count - mean * mean).coerceAtLeast(0.0)
+        return CaptureQuality(
+            mean.toFloat(),
+            sqrt(variance).toFloat(),
+            if (edgeCount == 0) 0f else (edgeSum / edgeCount).toFloat()
+        )
+    }
+
     private fun captureGuidedPose(pose: GuidedPose) {
         if (!isGuidedCaptureRunning.compareAndSet(false, true)) return
         runOnUiThread {
@@ -1061,6 +1297,23 @@ class MainActivity : ComponentActivity() {
                         val extraction = extractLocalFaces(jpeg)
                         if (extraction.samples.size != 1) {
                             throw IOException(getString(R.string.local_face_required))
+                        }
+                        val capturedFace = extraction.faces.singleOrNull()
+                            ?: throw IOException(getString(R.string.local_face_required))
+                        val capturedQuality = measureBitmapQuality(
+                            extraction.bitmap,
+                            capturedFace.boundingBox
+                        )
+                        val capturedEvaluation = evaluateGuidedFrame(
+                            extraction.faces,
+                            extraction.bitmap.width,
+                            extraction.bitmap.height,
+                            capturedQuality,
+                            pose,
+                            verification = false
+                        )
+                        if (!capturedEvaluation.accepted) {
+                            throw IOException(capturedEvaluation.message)
                         }
                         if (!guidedRegistrationActive || guidedPoseIndex != pose.ordinal) return@execute
                         guidedSamples += GuidedRegistrationSample(
@@ -1086,7 +1339,8 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         if (guidedPoseIndex >= GuidedPose.entries.size) {
-                            saveGuidedRegistration()
+                            isGuidedCaptureRunning.set(false)
+                            promptGuidedRecognitionTest()
                         } else {
                             isGuidedCaptureRunning.set(false)
                             updateGuidedRegistrationUi()
@@ -1110,9 +1364,215 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun promptGuidedRecognitionTest() {
+        guidedVerificationActive = false
+        guidedStableFrames = 0
+        runOnUiThread {
+            registrationFaceOverlay.clear()
+            registrationInstructionText.setText(R.string.registration_verification_prompt)
+            registrationFullscreenStepText.setText(R.string.registration_fullscreen_verification)
+            AlertDialog.Builder(this)
+                .setTitle(R.string.registration_verification_title)
+                .setMessage(R.string.registration_verification_message)
+                .setNegativeButton(R.string.cancel_registration) { _, _ ->
+                    cancelGuidedRegistration()
+                }
+                .setPositiveButton(R.string.registration_verification_start) { _, _ ->
+                    startGuidedRecognitionTest()
+                }
+                .setCancelable(false)
+                .show()
+        }
+    }
+
+    private fun startGuidedRecognitionTest() {
+        guidedVerificationActive = true
+        guidedStableFrames = 0
+        isGuidedCaptureRunning.set(false)
+        registrationCapturedImageView.setImageDrawable(null)
+        registrationCapturedImageView.visibility = View.GONE
+        registrationFaceOverlay.clear()
+        registrationInstructionText.setText(
+            R.string.registration_verification_front_instruction
+        )
+        registrationFullscreenStepText.setText(R.string.registration_fullscreen_verification)
+        showStatus(getString(R.string.registration_verification_live))
+    }
+
+    private fun processGuidedVerificationFrame(evaluation: GuidedFrameEvaluation) {
+        if (!guidedVerificationActive || isGuidedCaptureRunning.get()) return
+        if (!evaluation.accepted) {
+            guidedStableFrames = 0
+            runOnUiThread { registrationInstructionText.text = evaluation.message }
+            return
+        }
+        guidedStableFrames++
+        runOnUiThread {
+            registrationInstructionText.text = getString(
+                R.string.registration_verification_hold,
+                guidedStableFrames,
+                GUIDED_STABLE_FRAMES
+            )
+        }
+        if (guidedStableFrames < GUIDED_STABLE_FRAMES) return
+        guidedStableFrames = 0
+        captureGuidedRecognitionTest()
+    }
+
+    private fun captureGuidedRecognitionTest() {
+        if (!isGuidedCaptureRunning.compareAndSet(false, true)) return
+        guidedVerificationActive = false
+        runOnUiThread {
+            registrationInstructionText.setText(R.string.registration_verification_processing)
+        }
+        capturePhoto(
+            onSuccess = { jpeg ->
+                networkExecutor.execute {
+                    try {
+                        val context = guidedContext
+                            ?: throw IOException(getString(R.string.registration_cancelled))
+                        val extraction = extractLocalFaces(jpeg)
+                        if (extraction.samples.size != 1 || extraction.faces.size != 1) {
+                            throw IOException(getString(R.string.registration_single_face_required))
+                        }
+                        val face = extraction.faces.single()
+                        val quality = measureBitmapQuality(
+                            extraction.bitmap,
+                            face.boundingBox
+                        )
+                        val qualityEvaluation = evaluateGuidedFrame(
+                            extraction.faces,
+                            extraction.bitmap.width,
+                            extraction.bitmap.height,
+                            quality,
+                            GuidedPose.FRONT,
+                            verification = true
+                        )
+                        if (!qualityEvaluation.accepted) {
+                            throw IOException(qualityEvaluation.message)
+                        }
+                        val result = localStore.verifyRegistrationCandidate(
+                            context.studentId,
+                            context.name,
+                            guidedSamples.map { it.embedding },
+                            extraction.samples,
+                            extraction.bitmap.width,
+                            extraction.bitmap.height
+                        )
+                        val recognized = result.faces.singleOrNull()
+                        val passed = recognized?.studentId == context.studentId
+                        showFrozenRegistrationVerification(
+                            extraction.bitmap,
+                            recognized,
+                            context,
+                            passed
+                        )
+                        if (passed) {
+                            showGuidedVerificationSuccess(
+                                context,
+                                recognized?.similarity ?: 0f
+                            )
+                        } else {
+                            showGuidedVerificationFailure(
+                                getString(R.string.registration_verification_not_recognized)
+                            )
+                        }
+                    } catch (error: Exception) {
+                        showGuidedVerificationFailure(
+                            error.message ?: getString(
+                                R.string.registration_verification_not_recognized
+                            )
+                        )
+                    }
+                }
+            },
+            onError = { message -> showGuidedVerificationFailure(message) }
+        )
+    }
+
+    private fun showFrozenRegistrationVerification(
+        bitmap: Bitmap,
+        recognized: LocalRecognitionFace?,
+        context: GuidedRegistrationContext,
+        passed: Boolean
+    ) {
+        runOnUiThread {
+            registrationCapturedImageView.setImageBitmap(bitmap)
+            registrationCapturedImageView.visibility = View.VISIBLE
+            val state = if (passed) {
+                FaceBoxState.GUIDANCE_VALID
+            } else {
+                FaceBoxState.GUIDANCE_INVALID
+            }
+            val label = if (passed) {
+                getString(R.string.registration_verification_overlay_passed, context.name)
+            } else {
+                getString(R.string.registration_verification_overlay_failed)
+            }
+            val boxes = recognized?.let {
+                listOf(FaceOverlayBox(Rect(it.bounds), state, label))
+            }.orEmpty()
+            registrationFaceOverlay.setResults(
+                boxes,
+                bitmap.width,
+                bitmap.height,
+                false
+            )
+            registrationInstructionText.setText(
+                if (passed) {
+                    R.string.registration_verification_passed_instruction
+                } else {
+                    R.string.registration_verification_failed_instruction
+                }
+            )
+        }
+    }
+
+    private fun showGuidedVerificationSuccess(
+        context: GuidedRegistrationContext,
+        similarity: Float
+    ) {
+        runOnUiThread {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.registration_verification_passed_title)
+                .setMessage(
+                    getString(
+                        R.string.registration_verification_passed_message,
+                        context.name,
+                        similarity
+                    )
+                )
+                .setPositiveButton(R.string.registration_save_verified) { _, _ ->
+                    networkExecutor.execute { saveGuidedRegistration() }
+                }
+                .setCancelable(false)
+                .show()
+        }
+    }
+
+    private fun showGuidedVerificationFailure(message: String) {
+        runOnUiThread {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.registration_verification_failed_title)
+                .setMessage(
+                    getString(R.string.registration_verification_failed_message, message)
+                )
+                .setNegativeButton(R.string.cancel_registration) { _, _ ->
+                    isGuidedCaptureRunning.set(false)
+                    cancelGuidedRegistration()
+                }
+                .setPositiveButton(R.string.registration_verification_retry) { _, _ ->
+                    startGuidedRecognitionTest()
+                }
+                .setCancelable(false)
+                .show()
+        }
+    }
+
     private fun saveGuidedRegistration() {
         val context = guidedContext ?: return
         guidedRegistrationActive = false
+        guidedVerificationActive = false
         setProcessing(true, getString(R.string.registration_saving))
         runOnUiThread {
             registrationInstructionText.setText(R.string.registration_saving)
@@ -1178,6 +1638,7 @@ class MainActivity : ComponentActivity() {
     private fun resetGuidedRegistrationAfterSave(clearFields: Boolean) {
         runOnUiThread {
             guidedRegistrationActive = false
+            guidedVerificationActive = false
             guidedPoseIndex = -1
             guidedStableFrames = 0
             guidedSamples.clear()
@@ -1188,6 +1649,9 @@ class MainActivity : ComponentActivity() {
             cancelRegistrationButton.visibility = View.GONE
             registrationInstructionText.setText(R.string.registration_ready_instruction)
             registrationFullscreenStepText.setText(R.string.registration_fullscreen_initial)
+            registrationCapturedImageView.setImageDrawable(null)
+            registrationCapturedImageView.visibility = View.GONE
+            registrationFaceOverlay.clear()
             if (fullscreenCameraMode == FullscreenCameraMode.REGISTRATION) {
                 exitCameraFullscreen()
             }
@@ -1575,7 +2039,7 @@ class MainActivity : ComponentActivity() {
         studentNameEditText.setText(name)
         studentSexSpinner.setSelection(if (sex == SEX_FEMALE) 2 else 1)
         selectSection(AppSection.REGISTRATION)
-        registrationCameraContainer.post { startGuidedRegistration() }
+        registrationCameraContainer.post { showGuidedRegistrationConditions() }
     }
 
     private fun showFaceReferenceUpdateOptions(
@@ -2634,12 +3098,12 @@ class MainActivity : ComponentActivity() {
         val minimumFaceSize = (minOf(bitmap.width, bitmap.height) * minimumFaceRatio)
             .toInt()
             .coerceAtLeast(minimumFacePixels)
-        val samples = uniqueFaces
+        val validFaces = uniqueFaces
             .filter {
                 it.boundingBox.width() >= minimumFaceSize &&
                     it.boundingBox.height() >= minimumFaceSize
             }
-            .map { localRecognizer.extract(bitmap, it) }
+        val samples = validFaces.map { localRecognizer.extract(bitmap, it) }
         Log.d(
             LOG_TAG,
             "Cajas faciales: detectadas=${detectedFaces.size}, " +
@@ -2647,7 +3111,7 @@ class MainActivity : ComponentActivity() {
                 "limite=${minimumFaceSize}px, " +
                 "coordenadas=${uniqueFaces.joinToString { it.boundingBox.toShortString() }}"
         )
-        return LocalFaceExtraction(bitmap, samples)
+        return LocalFaceExtraction(bitmap, samples, validFaces)
     }
 
     private fun removeDuplicateFaceDetections(faces: List<Face>): List<Face> {

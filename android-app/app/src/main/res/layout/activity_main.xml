@@ -628,6 +628,14 @@
                         android:layout_width="match_parent"
                         android:layout_height="match_parent" />
 
+                    <ImageView
+                        android:id="@+id/registrationCapturedImageView"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:contentDescription="@string/registration_verification_photo"
+                        android:scaleType="centerCrop"
+                        android:visibility="gone" />
+
                     <com.proyectoia.asistencia.FaceBoxOverlay
                         android:id="@+id/registrationFaceOverlay"
                         android:layout_width="match_parent"

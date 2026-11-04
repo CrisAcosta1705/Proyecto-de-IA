@@ -687,33 +687,16 @@ class LocalAttendanceStore(context: Context) :
         db.beginTransaction()
         try {
             for (sample in samples) {
-                val scores = registered
-                    .asSequence()
-                    .filterNot { it.studentId in claimedStudents }
-                    .groupBy { it.studentId }
-                    .map { (_, embeddings) ->
-                        val best = embeddings.maxBy { cosine(sample.embedding, it.embedding) }
-                        StudentScore(
-                            best.studentId,
-                            best.studentName,
-                            cosine(sample.embedding, best.embedding)
-                        )
-                    }
-                    .sortedByDescending { it.similarity }
-                val best = scores.firstOrNull()
-                val second = scores.getOrNull(1)
-                val hasMargin = second == null ||
-                    best != null && best.similarity - second.similarity >= MINIMUM_SCORE_MARGIN
-                val recognizedMatch = best?.takeIf {
-                    it.similarity >= SIMILARITY_THRESHOLD && hasMargin
-                }
+                val scores = rankedScores(sample.embedding, registered, claimedStudents)
+                val recognizedMatch = acceptedScore(scores)
+                val bestSimilarity = scores.firstOrNull()?.similarity ?: 0f
 
                 if (recognizedMatch == null) {
                     results += LocalRecognitionFace(
                         Rect(sample.bounds),
                         null,
                         null,
-                        best?.similarity ?: 0f,
+                        bestSimilarity,
                         false
                     )
                     continue
@@ -750,6 +733,36 @@ class LocalAttendanceStore(context: Context) :
             imageWidth,
             imageHeight
         )
+    }
+
+    fun verifyRegistrationCandidate(
+        studentId: String,
+        studentName: String,
+        referenceEmbeddings: List<FloatArray>,
+        samples: List<LocalFaceSample>,
+        imageWidth: Int,
+        imageHeight: Int
+    ): LocalRecognitionBatch {
+        require(referenceEmbeddings.isNotEmpty()) {
+            "Se necesita al menos una referencia para verificar el registro."
+        }
+        val registered = loadEmbeddings(readableDatabase)
+            .filterNot { it.studentId == studentId } +
+            referenceEmbeddings.map { embedding ->
+                RegisteredEmbedding(studentId, studentName, embedding)
+            }
+        val results = samples.map { sample ->
+            val scores = rankedScores(sample.embedding, registered, emptySet())
+            val accepted = acceptedScore(scores)
+            LocalRecognitionFace(
+                Rect(sample.bounds),
+                accepted?.studentId,
+                accepted?.studentName,
+                accepted?.similarity ?: scores.firstOrNull()?.similarity ?: 0f,
+                false
+            )
+        }
+        return LocalRecognitionBatch(results, 0, imageWidth, imageHeight)
     }
 
     private fun loadEmbeddings(db: SQLiteDatabase): List<RegisteredEmbedding> {
@@ -892,6 +905,34 @@ class LocalAttendanceStore(context: Context) :
         var similarity = 0f
         for (index in left.indices) similarity += left[index] * right[index]
         return similarity
+    }
+
+    private fun rankedScores(
+        embedding: FloatArray,
+        registered: List<RegisteredEmbedding>,
+        excludedStudents: Set<String>
+    ): List<StudentScore> {
+        return registered
+            .asSequence()
+            .filterNot { it.studentId in excludedStudents }
+            .groupBy { it.studentId }
+            .map { (_, embeddings) ->
+                val best = embeddings.maxBy { cosine(embedding, it.embedding) }
+                StudentScore(
+                    best.studentId,
+                    best.studentName,
+                    cosine(embedding, best.embedding)
+                )
+            }
+            .sortedByDescending { it.similarity }
+    }
+
+    private fun acceptedScore(scores: List<StudentScore>): StudentScore? {
+        val best = scores.firstOrNull() ?: return null
+        val second = scores.getOrNull(1)
+        val hasMargin = second == null ||
+            best.similarity - second.similarity >= MINIMUM_SCORE_MARGIN
+        return best.takeIf { it.similarity >= SIMILARITY_THRESHOLD && hasMargin }
     }
 
     private data class RegisteredEmbedding(
