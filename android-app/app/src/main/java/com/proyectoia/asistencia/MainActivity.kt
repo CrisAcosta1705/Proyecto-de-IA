@@ -98,13 +98,14 @@ class MainActivity : ComponentActivity() {
         private const val STATE_HISTORY = "history"
         private const val STATE_STATUS = "status"
         private const val STATE_APP_SECTION = "app_section"
-        private const val GUIDED_STABLE_FRAMES = 4
+        private const val GUIDED_STABLE_FRAMES = 3
         private const val REQUIRED_REFERENCE_PHOTOS = 4
         private const val MAX_GALLERY_IMAGE_BYTES = 10 * 1024 * 1024
-        private const val MIN_CAPTURE_BRIGHTNESS = 48f
-        private const val MAX_CAPTURE_BRIGHTNESS = 218f
-        private const val MIN_CAPTURE_CONTRAST = 17f
-        private const val MIN_CAPTURE_SHARPNESS = 4f
+        private const val MIN_CAPTURE_BRIGHTNESS = 34f
+        private const val MAX_CAPTURE_BRIGHTNESS = 236f
+        private const val MIN_CAPTURE_CONTRAST = 10f
+        private const val MIN_LIVE_SHARPNESS = 0.65f
+        private const val MIN_CAPTURE_SHARPNESS = 0.9f
     }
 
     private lateinit var classSpinner: Spinner
@@ -255,7 +256,8 @@ class MainActivity : ComponentActivity() {
     private data class GuidedFrameEvaluation(
         val accepted: Boolean,
         val message: String,
-        val overlayLabel: String
+        val overlayLabel: String,
+        val qualityIssue: Boolean = false
     )
 
     private data class GalleryProcessingUi(
@@ -1090,7 +1092,11 @@ class MainActivity : ComponentActivity() {
         if (!guidedRegistrationActive || isGuidedCaptureRunning.get()) return
         val pose = GuidedPose.entries.getOrNull(guidedPoseIndex) ?: return
         if (!evaluation.accepted) {
-            guidedStableFrames = 0
+            guidedStableFrames = if (evaluation.qualityIssue) {
+                (guidedStableFrames - 1).coerceAtLeast(0)
+            } else {
+                0
+            }
             runOnUiThread { registrationInstructionText.text = evaluation.message }
             return
         }
@@ -1125,7 +1131,8 @@ class MainActivity : ComponentActivity() {
         imageHeight: Int,
         quality: CaptureQuality,
         pose: GuidedPose,
-        verification: Boolean
+        verification: Boolean,
+        capturedImage: Boolean = false
     ): GuidedFrameEvaluation {
         if (faces.isEmpty()) {
             return GuidedFrameEvaluation(
@@ -1153,7 +1160,7 @@ class MainActivity : ComponentActivity() {
                 getString(R.string.registration_overlay_too_far)
             )
         }
-        qualityProblem(quality)?.let { problem ->
+        qualityProblem(quality, capturedImage)?.let { problem ->
             return problem
         }
         if (!matchesGuidedPose(face, pose)) {
@@ -1176,27 +1183,39 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun qualityProblem(quality: CaptureQuality): GuidedFrameEvaluation? {
+    private fun qualityProblem(
+        quality: CaptureQuality,
+        capturedImage: Boolean
+    ): GuidedFrameEvaluation? {
+        val minimumSharpness = if (capturedImage) {
+            MIN_CAPTURE_SHARPNESS
+        } else {
+            MIN_LIVE_SHARPNESS
+        }
         return when {
             quality.brightness < MIN_CAPTURE_BRIGHTNESS -> GuidedFrameEvaluation(
                 false,
                 getString(R.string.registration_quality_dark),
-                getString(R.string.registration_overlay_dark)
+                getString(R.string.registration_overlay_dark),
+                qualityIssue = true
             )
             quality.brightness > MAX_CAPTURE_BRIGHTNESS -> GuidedFrameEvaluation(
                 false,
                 getString(R.string.registration_quality_bright),
-                getString(R.string.registration_overlay_bright)
+                getString(R.string.registration_overlay_bright),
+                qualityIssue = true
             )
             quality.contrast < MIN_CAPTURE_CONTRAST -> GuidedFrameEvaluation(
                 false,
                 getString(R.string.registration_quality_contrast),
-                getString(R.string.registration_overlay_low_contrast)
+                getString(R.string.registration_overlay_low_contrast),
+                qualityIssue = true
             )
-            quality.sharpness < MIN_CAPTURE_SHARPNESS -> GuidedFrameEvaluation(
+            quality.sharpness < minimumSharpness -> GuidedFrameEvaluation(
                 false,
                 getString(R.string.registration_quality_blurry),
-                getString(R.string.registration_overlay_blurry)
+                getString(R.string.registration_overlay_blurry),
+                qualityIssue = true
             )
             else -> null
         }
@@ -1310,7 +1329,8 @@ class MainActivity : ComponentActivity() {
                             extraction.bitmap.height,
                             capturedQuality,
                             pose,
-                            verification = false
+                            verification = false,
+                            capturedImage = true
                         )
                         if (!capturedEvaluation.accepted) {
                             throw IOException(capturedEvaluation.message)
@@ -1402,7 +1422,11 @@ class MainActivity : ComponentActivity() {
     private fun processGuidedVerificationFrame(evaluation: GuidedFrameEvaluation) {
         if (!guidedVerificationActive || isGuidedCaptureRunning.get()) return
         if (!evaluation.accepted) {
-            guidedStableFrames = 0
+            guidedStableFrames = if (evaluation.qualityIssue) {
+                (guidedStableFrames - 1).coerceAtLeast(0)
+            } else {
+                0
+            }
             runOnUiThread { registrationInstructionText.text = evaluation.message }
             return
         }
@@ -1446,7 +1470,8 @@ class MainActivity : ComponentActivity() {
                             extraction.bitmap.height,
                             quality,
                             GuidedPose.FRONT,
-                            verification = true
+                            verification = true,
+                            capturedImage = true
                         )
                         if (!qualityEvaluation.accepted) {
                             throw IOException(qualityEvaluation.message)

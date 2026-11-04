@@ -142,7 +142,7 @@
     <string name="registration_quality_dark">La iluminacion es insuficiente. Ilumina el rostro de frente.</string>
     <string name="registration_quality_bright">Hay demasiada luz. Evita reflejos y luz directa sobre el rostro.</string>
     <string name="registration_quality_contrast">El rostro tiene poca definicion. Mejora la iluminacion y evita contraluz.</string>
-    <string name="registration_quality_blurry">La imagen esta borrosa. Limpia la lente y mantente estable.</string>
+    <string name="registration_quality_blurry">La imagen esta demasiado borrosa. Mantente estable un momento.</string>
     <string name="registration_pose_quality_ready">Posicion y calidad correctas. Mantente estable.</string>
     <string name="registration_overlay_no_face">Sin rostro</string>
     <string name="registration_overlay_multiple_faces">Solo una persona</string>
