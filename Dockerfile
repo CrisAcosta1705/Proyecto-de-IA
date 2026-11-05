@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     ASISTENCIA_DB=/var/data/asistencia.db \
     INSIGHTFACE_ROOT=/var/data/models/insightface \
-    INSIGHTFACE_MODEL=buffalo_l
+    INSIGHTFACE_MODEL=buffalo_sc
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
@@ -33,4 +33,4 @@ USER appuser
 
 EXPOSE 10000
 
-CMD ["sh", "-c", "uvicorn asistencia_ia.api:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1"]
+CMD ["sh", "-c", "if [ \"$INSIGHTFACE_MODEL\" != \"buffalo_l\" ]; then rm -rf /var/data/models/insightface/models/buffalo_l /var/data/models/insightface/models/buffalo_l.zip; fi; exec uvicorn asistencia_ia.api:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1"]

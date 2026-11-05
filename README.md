@@ -114,12 +114,13 @@ http://127.0.0.1:8000/docs
 
 El repositorio incluye `Dockerfile`, `requirements-server.txt` y la definicion
 de infraestructura `.railway/railway.ts`. Railway crea el servicio en la region
-US East, comprueba `/health` y monta un volumen persistente de 5 GB en
+US East, comprueba `/health` y monta un volumen persistente de 500 MB en
 `/var/data` para la base SQLite, las fotografias y los modelos.
 
 1. Instala la CLI con `npm install --global @railway/cli` y ejecuta
    `railway login`.
-2. Desde la raiz del repositorio ejecuta `railway init --name asistencia-ia`.
+2. Desde la raiz del repositorio ejecuta `npm install` y
+   `railway init --name asistencia-ia`.
 3. Ejecuta `railway config apply` para crear `asistencia-api` y su volumen. El
    primer arranque permanecera bloqueado hasta configurar la clave.
 4. Configura `ASISTENCIA_API_KEY` con una clave aleatoria de al menos 32
@@ -135,14 +136,25 @@ US East, comprueba `/health` y monta un volumen persistente de 5 GB en
 | Variable | `ASISTENCIA_API_URL` | URL HTTPS `*.up.railway.app` asignada por Railway |
 | Secreto | `ASISTENCIA_API_KEY` | La misma clave configurada en Railway |
 
+El servicio de este proyecto esta publicado en:
+
+```text
+https://asistencia-api-production-f93b.up.railway.app
+```
+
 Despues de configurar la variable y el secreto, genera una nueva etiqueta para
 que GitHub compile el APK con el dominio y la clave. La clave queda incorporada
 en el APK y debe rotarse si el archivo se distribuye fuera del grupo autorizado.
 
-El proyecto debe mantener una sola replica mientras use SQLite. El volumen evita
-que los registros desaparezcan al desplegar una nueva version, pero se recomienda
-activar copias de seguridad y revisar los costos del plan antes de almacenar
-datos biometricos reales.
+El proyecto debe mantener una sola replica mientras use SQLite. El volumen de
+500 MB es adecuado para las pruebas iniciales y puede ampliarse al cambiar de
+plan. El volumen evita que los registros desaparezcan al desplegar una nueva
+version, pero se recomienda activar copias de seguridad antes de almacenar datos
+biometricos reales.
+
+El plan gratuito utiliza `buffalo_sc`, que ocupa menos espacio y memoria. Para
+usar `buffalo_l` con mayor precision se debe ampliar el volumen y la memoria del
+servicio antes de cambiar `INSIGHTFACE_MODEL`.
 
 ## Flujo desde Android
 

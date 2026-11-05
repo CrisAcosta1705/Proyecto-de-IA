@@ -1,0 +1,11 @@
+{
+  "name": "asistencia-ia-infrastructure",
+  "private": true,
+  "scripts": {
+    "railway:plan": "railway config plan",
+    "railway:apply": "railway config apply"
+  },
+  "devDependencies": {
+    "railway": "3.16.0"
+  }
+}
