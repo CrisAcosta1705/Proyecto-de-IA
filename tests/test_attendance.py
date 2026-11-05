@@ -91,6 +91,55 @@ class AttendanceServiceTest(unittest.TestCase):
         self.assertEqual(result["attendance_count"], 0)
         self.assertFalse(result["faces"][0]["recognized"])
 
+    def test_group_photo_recognizes_five_unique_students(self) -> None:
+        embeddings = np.eye(5, dtype=np.float32)
+        for index, embedding in enumerate(embeddings):
+            self.extractor.faces = [_face(embedding)]
+            self.service.register_student(
+                f"estudiante_{index}",
+                f"Estudiante {index}",
+                [_image_bytes()],
+            )
+        self.extractor.faces = [_face(embedding) for embedding in embeddings]
+        session_id = self.service.create_session("Inteligencia artificial")
+
+        result = self.service.recognize(session_id, _image_bytes())
+
+        recognized_ids = {
+            face["student_id"]
+            for face in result["faces"]
+            if face["recognized"]
+        }
+        self.assertEqual(result["faces_detected"], 5)
+        self.assertEqual(result["recognized_count"], 5)
+        self.assertEqual(result["attendance_count"], 5)
+        self.assertEqual(
+            recognized_ids,
+            {f"estudiante_{index}" for index in range(5)},
+        )
+
+    def test_group_photo_does_not_repeat_an_identity(self) -> None:
+        self.extractor.faces = [_face([1.0, 0.0])]
+        self.service.register_student(
+            "estudiante_001",
+            "Estudiante Uno",
+            [_image_bytes()],
+        )
+        self.extractor.faces = [
+            _face([1.0, 0.0]),
+            _face([0.99, 0.01]),
+        ]
+        session_id = self.service.create_session("Programacion")
+
+        result = self.service.recognize(session_id, _image_bytes())
+
+        self.assertEqual(result["recognized_count"], 1)
+        self.assertEqual(result["attendance_count"], 1)
+        self.assertEqual(
+            sum(face["recognized"] for face in result["faces"]),
+            1,
+        )
+
     def test_registration_requires_exactly_one_face_per_photo(self) -> None:
         self.extractor.faces = []
 

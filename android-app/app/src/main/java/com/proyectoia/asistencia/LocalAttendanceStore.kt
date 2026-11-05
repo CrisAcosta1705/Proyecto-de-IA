@@ -714,14 +714,26 @@ class LocalAttendanceStore(context: Context) :
     ): LocalRecognitionBatch {
         val db = writableDatabase
         val registered = loadEmbeddings(db)
+        val rankedBySample = samples.map { sample ->
+            rankedScores(sample.embedding, registered, emptySet())
+        }
+        val candidates = rankedBySample.mapIndexedNotNull { index, scores ->
+            acceptedScore(scores)?.let { index to it }
+        }.sortedByDescending { (_, score) -> score.similarity }
         val claimedStudents = mutableSetOf<String>()
+        val acceptedBySample = mutableMapOf<Int, StudentScore>()
+        candidates.forEach { (sampleIndex, score) ->
+            if (claimedStudents.add(score.studentId)) {
+                acceptedBySample[sampleIndex] = score
+            }
+        }
         val results = mutableListOf<LocalRecognitionFace>()
 
         db.beginTransaction()
         try {
-            for (sample in samples) {
-                val scores = rankedScores(sample.embedding, registered, claimedStudents)
-                val recognizedMatch = acceptedScore(scores)
+            for ((index, sample) in samples.withIndex()) {
+                val scores = rankedBySample[index]
+                val recognizedMatch = acceptedBySample[index]
                 val bestSimilarity = scores.firstOrNull()?.similarity ?: 0f
 
                 if (recognizedMatch == null) {
@@ -735,7 +747,6 @@ class LocalAttendanceStore(context: Context) :
                     continue
                 }
 
-                claimedStudents += recognizedMatch.studentId
                 val inserted = db.insertWithOnConflict(
                     "attendance",
                     null,

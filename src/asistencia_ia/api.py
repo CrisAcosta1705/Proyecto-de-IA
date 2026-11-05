@@ -58,13 +58,25 @@ def create_app(
         if similarity_threshold is not None
         else float(os.environ.get("FACE_SIMILARITY_THRESHOLD", "0.45"))
     )
+    minimum_score_margin = float(
+        os.environ.get("FACE_MINIMUM_SCORE_MARGIN", "0.07")
+    )
     database = AttendanceDatabase(db_path)
     database.initialize()
+    detection_size = int(os.environ.get("INSIGHTFACE_DETECTION_SIZE", "1024"))
+    if not 320 <= detection_size <= 2048:
+        raise ValueError("INSIGHTFACE_DETECTION_SIZE debe estar entre 320 y 2048.")
     face_extractor = extractor or InsightFaceExtractor(
         model_name=os.environ.get("INSIGHTFACE_MODEL", "buffalo_l"),
         model_root=Path(os.environ.get("INSIGHTFACE_ROOT", "models/insightface")),
+        detection_size=(detection_size, detection_size),
     )
-    service = AttendanceService(database, face_extractor, threshold)
+    service = AttendanceService(
+        database,
+        face_extractor,
+        threshold,
+        minimum_score_margin,
+    )
     configured_api_key = (
         api_key if api_key is not None else os.environ.get("ASISTENCIA_API_KEY", "")
     ).strip()

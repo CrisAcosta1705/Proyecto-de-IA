@@ -140,6 +140,13 @@ US East, comprueba `/health` y monta un volumen persistente de 500 MB en
 | Variable | `ASISTENCIA_API_URL` | URL HTTPS `*.up.railway.app` asignada por Railway |
 | Secreto | `ASISTENCIA_API_KEY` | La misma clave configurada en Railway |
 
+La API usa `FACE_SIMILARITY_THRESHOLD=0.45`,
+`FACE_MINIMUM_SCORE_MARGIN=0.07` e `INSIGHTFACE_DETECTION_SIZE=1024` como
+valores predeterminados. El margen evita aceptar identidades ambiguas y el
+tamaño de detección conserva más detalle en fotografías grupales. Estos valores
+pueden configurarse como variables de Railway después de calibrarlos con las
+fotografías reales del proyecto.
+
 El servicio de este proyecto esta publicado en:
 
 ```text
@@ -165,7 +172,8 @@ servicio antes de cambiar `INSIGHTFACE_MODEL`.
 1. En el primer inicio, crea el usuario y la contraseña de administración del
    dispositivo. En los inicios posteriores utiliza esas credenciales.
 2. Selecciona `Solo telefono` para trabajar sin computadora, `Servidor` para
-   usar exclusivamente el servidor permanente o `Automatico` para utilizar ambos.
+   usar exclusivamente el servidor permanente o `Automatico` para utilizar el
+   servidor cuando esté disponible y el teléfono como respaldo.
 3. Si ya existian estudiantes en el servidor, pulsa
    `Recuperar registros del servidor`. No se copian embeddings incompatibles:
    la aplicacion vuelve a procesar cada fotografia con el modelo del telefono.
@@ -178,6 +186,9 @@ servicio antes de cambiar `INSIGHTFACE_MODEL`.
 7. Abre `Asistencia`, selecciona materia y fecha, y pulsa `Reconocer asistencia`.
 8. Puedes tomar varias fotografias para la misma materia y fecha. Cada captura
    agrega estudiantes nuevos y conserva una sola asistencia por carnet.
+   En grupos, la aplicación captura a la máxima resolución compatible y asigna
+   cada identidad a un solo rostro. Para aulas grandes se recomienda tomar varias
+   fotografías cercanas por sectores.
 9. Abre `Historial` para consultar todas las listas y sus estadisticas por sexo.
 10. Abre `Estudiantes` para ver la tabla de rostros, editar perfiles o eliminar
    datos biometricos sin borrar asistencias historicas.

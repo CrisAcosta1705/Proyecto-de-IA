@@ -59,10 +59,12 @@ class AttendanceService:
         database: AttendanceDatabase,
         extractor: FaceEmbeddingExtractor,
         similarity_threshold: float = 0.45,
+        minimum_score_margin: float = 0.07,
     ):
         self.database = database
         self.extractor = extractor
         self.similarity_threshold = similarity_threshold
+        self.minimum_score_margin = minimum_score_margin
 
     def register_student(
         self,
@@ -160,22 +162,25 @@ class AttendanceService:
         faces = self.extractor.extract(image)
         references = self.database.references()
         names = self.database.student_names()
-        matcher = EmbeddingMatcher(references, self.similarity_threshold)
+        matcher = EmbeddingMatcher(
+            references,
+            self.similarity_threshold,
+            self.minimum_score_margin,
+        )
+        matches = matcher.match_batch([face.embedding for face in faces])
         recognized_in_frame: set[str] = set()
         results: list[FaceRecognitionResult] = []
 
-        for face in faces:
-            match = matcher.match(face.embedding)
+        for face, match in zip(faces, matches, strict=True):
             recorded = False
             student_id = match.student_id
             if match.accepted and student_id is not None:
-                if student_id not in recognized_in_frame:
-                    recorded = self.database.record_attendance(
-                        session_id,
-                        student_id,
-                        match.similarity,
-                    )
-                    recognized_in_frame.add(student_id)
+                recorded = self.database.record_attendance(
+                    session_id,
+                    student_id,
+                    match.similarity,
+                )
+                recognized_in_frame.add(student_id)
 
             results.append(
                 FaceRecognitionResult(

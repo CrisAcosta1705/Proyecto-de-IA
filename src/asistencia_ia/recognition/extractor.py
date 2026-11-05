@@ -30,7 +30,7 @@ class InsightFaceExtractor:
         model_name: str = "buffalo_l",
         model_root: Path | str = Path("models/insightface"),
         detection_threshold: float = 0.65,
-        detection_size: tuple[int, int] = (640, 640),
+        detection_size: tuple[int, int] = (1024, 1024),
     ):
         self.model_name = model_name
         self.model_root = Path(model_root)

@@ -47,6 +47,9 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -1074,9 +1077,15 @@ class MainActivity : ComponentActivity() {
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also { it.setAnalyzer(cameraExecutor, ::analyzeFrame) }
+            val captureResolutionSelector = ResolutionSelector.Builder()
+                .setAspectRatioStrategy(
+                    AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
+                )
+                .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                .build()
             imageCapture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                .setTargetResolution(Size(1920, 1080))
+                .setResolutionSelector(captureResolutionSelector)
                 .build()
 
             try {
@@ -3060,14 +3069,6 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 ProcessingMode.AUTOMATIC -> {
-                    val localResult = runCatching {
-                        recognizeLocally(selection, jpeg)
-                    }
-                    if ((localResult.getOrNull()?.recognizedCount ?: 0) > 0) {
-                        showLocalRecognitionResult(localResult.getOrThrow())
-                        return@captureAndRunNetwork
-                    }
-
                     val serverResult = if (
                         selection.serverUrl != null &&
                         runCatching { isHealthyServer(selection.serverUrl) }.getOrDefault(false)
@@ -3079,7 +3080,9 @@ class MainActivity : ComponentActivity() {
                     if (serverResult?.isSuccess == true) {
                         showRecognitionResult(serverResult.getOrThrow())
                     } else {
-                        showLocalRecognitionResult(localResult.getOrThrow())
+                        showLocalRecognitionResult(
+                            recognizeLocally(selection, jpeg)
+                        )
                     }
                 }
             }
@@ -3326,7 +3329,7 @@ class MainActivity : ComponentActivity() {
             bitmap,
             localFaceDetector,
             minimumFaceRatio = 0.05f,
-            minimumFacePixels = 48
+            minimumFacePixels = 72
         )
     }
 
