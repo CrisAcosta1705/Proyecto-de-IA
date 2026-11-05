@@ -3,6 +3,7 @@ services:
     name: proyecto-ia-asistencia-crisacosta1705
     runtime: docker
     plan: 1c-2g
+    autoDeployTrigger: checksPass
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health

@@ -116,6 +116,8 @@ El repositorio incluye `Dockerfile`, `requirements-server.txt` y `render.yaml`.
 El Blueprint crea un servicio de 2 GB de RAM, dominio HTTPS, comprobacion en
 `/health` y un disco persistente de 5 GB para la base SQLite y los modelos.
 
+[![Desplegar en Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/CrisAcosta1705/Proyecto-de-IA)
+
 1. Crea una cuenta en Render y conecta el repositorio de GitHub.
 2. Selecciona `New > Blueprint` y el repositorio `Proyecto-de-IA`.
 3. Cuando Render solicite `ASISTENCIA_API_KEY`, ingresa una clave aleatoria de
