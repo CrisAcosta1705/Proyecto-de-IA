@@ -60,7 +60,7 @@ identidades y asistencia sin computadora ni conexion a Internet.
   genera un embedding compatible con MobileFaceNet y lo conserva en el telefono.
 - Subida manual de estudiantes y referencias faciales locales al servidor, con
   validacion individual y confirmacion antes de reemplazar referencias remotas.
-- Acceso administrativo local con contrasena protegida mediante PBKDF2, bloqueo
+- Acceso administrativo local con contraseña protegida mediante PBKDF2, bloqueo
   temporal por intentos fallidos y cierre de sesion sin borrar datos.
 
 ## Preparar Python
@@ -162,7 +162,7 @@ servicio antes de cambiar `INSIGHTFACE_MODEL`.
 
 ## Flujo desde Android
 
-1. En el primer inicio, crea el usuario y la contrasena de administracion del
+1. En el primer inicio, crea el usuario y la contraseña de administración del
    dispositivo. En los inicios posteriores utiliza esas credenciales.
 2. Selecciona `Solo telefono` para trabajar sin computadora, `Servidor` para
    usar exclusivamente el servidor permanente o `Automatico` para utilizar ambos.
@@ -243,14 +243,14 @@ En `Settings > Secrets and variables > Actions` del repositorio se deben crear:
 | Secreto | Contenido |
 | --- | --- |
 | `ANDROID_KEYSTORE_BASE64` | Texto Base64 copiado por PowerShell |
-| `ANDROID_KEYSTORE_PASSWORD` | Contrasena del almacen de claves |
+| `ANDROID_KEYSTORE_PASSWORD` | Contraseña del almacén de claves |
 | `ANDROID_KEY_ALIAS` | Alias de la clave, por ejemplo `asistencia-ia` |
-| `ANDROID_KEY_PASSWORD` | Contrasena de la clave |
+| `ANDROID_KEY_PASSWORD` | Contraseña de la clave |
 
 El mismo apartado tambien debe contener `ASISTENCIA_API_URL` como variable y
 `ASISTENCIA_API_KEY` como secreto para conectar el APK con el servidor permanente.
 
-La clave y sus contrasenas deben conservarse para poder instalar futuras
+La clave y sus contraseñas deben conservarse para poder instalar futuras
 actualizaciones sobre una version ya distribuida. Los archivos APK, AAB, JKS y
 keystore permanecen excluidos de Git.
 
@@ -284,7 +284,7 @@ perfiles y referencias guardados en el telefono, pero las asistencias historicas
 no se sincronizan automaticamente. Android tiene deshabilitado el respaldo del
 sistema para evitar copiar biometria a la nube.
 
-El login administrativo es local al dispositivo. La contrasena no se guarda en
+El login administrativo es local al dispositivo. La contraseña no se guarda en
 texto plano: se conserva un hash PBKDF2 con sal aleatoria. Este acceso protege la
 interfaz y los datos locales; la API de produccion utiliza ademas su propia clave
 tecnica enviada por el APK firmado.
