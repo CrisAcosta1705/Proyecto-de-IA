@@ -24,6 +24,9 @@ jobs:
   build-apk:
     name: Compilar APK
     runs-on: ubuntu-latest
+    env:
+      ASISTENCIA_API_URL: ${{ vars.ASISTENCIA_API_URL }}
+      ASISTENCIA_API_KEY: ${{ secrets.ASISTENCIA_API_KEY }}
 
     steps:
       - name: Descargar repositorio

@@ -3,7 +3,7 @@
     <string name="app_name">Asistencia IA</string>
     <string name="app_subtitle">Conteo y reconocimiento autorizado de estudiantes.</string>
     <string name="server_label">Servidor de IA</string>
-    <string name="server_url_default">http://192.168.137.188:8000</string>
+    <string name="server_url_default">https://proyecto-ia-asistencia-crisacosta1705.onrender.com</string>
     <string name="processing_mode_label">Procesamiento</string>
     <string-array name="processing_modes">
         <item>Automatico</item>
@@ -61,8 +61,8 @@
     <string name="camera_permission_denied">No se concedio permiso de camara.</string>
     <string name="capture_not_ready">La camara aun no tiene una imagen disponible.</string>
     <string name="network_busy">Hay una solicitud en proceso.</string>
-    <string name="server_unreachable">No se pudo conectar con la IA. Inicia la API en la computadora y verifica que ambos dispositivos esten en la misma red Wi-Fi.</string>
-    <string name="server_discovered">Servidor de IA detectado: %1$s</string>
+    <string name="server_unreachable">No se pudo conectar con el servidor permanente. Verifica la conexion a Internet e intenta nuevamente.</string>
+    <string name="server_connected">Servidor permanente conectado: %1$s</string>
     <string name="sync_students">Recuperar registros del servidor</string>
     <string name="syncing_students">Recuperando registros faciales anteriores...</string>
     <string name="students_synced">Sincronizacion terminada: %1$d recuperados, %2$d sin cambios y %3$d con error.</string>
@@ -92,7 +92,7 @@
     <string name="history_screen_subtitle">Listas guardadas y estadisticas</string>
     <string name="students_screen_subtitle">Rostros y perfiles registrados</string>
     <string name="registration_screen_subtitle">Captura facial guiada por movimiento</string>
-    <string name="server_configuration_description">Selecciona si la IA trabaja en el telefono, en el servidor o de forma automatica.</string>
+    <string name="server_configuration_description">Selecciona si la IA trabaja en el telefono, en el servidor permanente o de forma automatica.</string>
     <string name="recent_activity">Actividad reciente</string>
     <string name="no_recent_activity">Aun no hay actividad en esta sesion.</string>
     <string name="stat_total_zero">0\nTotal</string>

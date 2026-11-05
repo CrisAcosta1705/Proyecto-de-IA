@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.apk
+*.aab
+android-app
+data
+models
+notebooks
+reports
+runs
+tests
+videos

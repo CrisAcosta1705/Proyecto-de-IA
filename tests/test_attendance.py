@@ -178,6 +178,26 @@ class AttendanceServiceTest(unittest.TestCase):
         self.assertEqual(photo.headers["cache-control"], "no-store")
         self.assertEqual(photo.content, image)
 
+    def test_api_key_protects_biometric_endpoints(self) -> None:
+        app = create_app(
+            database_path=self.database.path,
+            extractor=self.extractor,
+            similarity_threshold=0.8,
+            api_key="clave-de-prueba",
+        )
+
+        with TestClient(app) as client:
+            health = client.get("/health")
+            unauthorized = client.get("/students")
+            authorized = client.get(
+                "/students",
+                headers={"X-API-Key": "clave-de-prueba"},
+            )
+
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(authorized.status_code, 200)
+
     def test_api_edits_student_profile_without_changing_biometrics(self) -> None:
         self.extractor.faces = [_face([1.0, 0.0])]
         self.service.register_student(

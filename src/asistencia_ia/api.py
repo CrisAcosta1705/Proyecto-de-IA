@@ -1,10 +1,13 @@
 import argparse
 from datetime import date
+import hmac
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
+from starlette.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 import uvicorn
 
@@ -44,6 +47,7 @@ def create_app(
     database_path: Path | str | None = None,
     extractor=None,
     similarity_threshold: float | None = None,
+    api_key: str | None = None,
 ) -> FastAPI:
     db_path = Path(
         database_path
@@ -61,15 +65,56 @@ def create_app(
         model_root=Path(os.environ.get("INSIGHTFACE_ROOT", "models/insightface")),
     )
     service = AttendanceService(database, face_extractor, threshold)
+    configured_api_key = (
+        api_key if api_key is not None else os.environ.get("ASISTENCIA_API_KEY", "")
+    ).strip()
 
     app = FastAPI(
         title="Asistencia estudiantil con IA",
         version="0.7.0",
-        description="API local para registro facial y asistencia sin duplicados.",
+        description="API para registro facial y asistencia sin duplicados.",
     )
     app.state.database = database
     app.state.extractor = face_extractor
     app.state.service = service
+
+    public_paths = {"/health", "/docs", "/openapi.json", "/redoc"}
+
+    @app.middleware("http")
+    async def require_api_key(request: Request, call_next):
+        if request.url.path in public_paths or not configured_api_key:
+            return await call_next(request)
+        received_api_key = request.headers.get("X-API-Key", "")
+        if not hmac.compare_digest(received_api_key, configured_api_key):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "La clave de acceso de la API no es valida."},
+            )
+        return await call_next(request)
+
+    def secured_openapi() -> dict[str, object]:
+        if app.openapi_schema is not None:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+        schema.setdefault("components", {}).setdefault("securitySchemes", {})[
+            "ApiKeyAuth"
+        ] = {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+        }
+        schema["security"] = [{"ApiKeyAuth": []}]
+        for operation in schema.get("paths", {}).get("/health", {}).values():
+            operation["security"] = []
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = secured_openapi
 
     @app.get("/health")
     def health() -> dict[str, object]:

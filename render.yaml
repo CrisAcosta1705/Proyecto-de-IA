@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: proyecto-ia-asistencia-crisacosta1705
+    runtime: docker
+    plan: 1c-2g
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: ASISTENCIA_DB
+        value: /var/data/asistencia.db
+      - key: INSIGHTFACE_ROOT
+        value: /var/data/models/insightface
+      - key: INSIGHTFACE_MODEL
+        value: buffalo_l
+      - key: FACE_SIMILARITY_THRESHOLD
+        value: "0.45"
+      - key: ASISTENCIA_API_KEY
+        sync: false
+    disk:
+      name: asistencia-data
+      mountPath: /var/data
+      sizeGB: 5

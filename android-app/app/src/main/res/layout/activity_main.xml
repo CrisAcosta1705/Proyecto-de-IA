@@ -132,7 +132,8 @@
                         android:hint="@string/server_url_default"
                         android:inputType="textUri"
                         android:paddingHorizontal="14dp"
-                        android:singleLine="true" />
+                        android:singleLine="true"
+                        android:textColor="@color/text_secondary" />
 
                     <Button
                         android:id="@+id/syncStudentsButton"

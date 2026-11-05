@@ -1,0 +1,49 @@
+name: Verificar servidor en contenedor
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "render.yaml"
+      - "requirements-server.txt"
+      - "pyproject.toml"
+      - "src/**"
+      - ".github/workflows/backend-container.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "render.yaml"
+      - "requirements-server.txt"
+      - "pyproject.toml"
+      - "src/**"
+      - ".github/workflows/backend-container.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build:
+    name: Construir imagen del servidor
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Construir imagen
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: asistencia-ia-api:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -11,9 +11,10 @@ Aplicacion Android
     |-- Modo servidor: fotografia JPEG 1080p hacia FastAPI
     `-- Modo automatico: telefono primero y servidor como respaldo
 
-API FastAPI opcional
+API FastAPI permanente
     |-- InsightFace/ArcFace de mayor capacidad
-    `-- SQLite independiente para estudiantes y asistencia
+    |-- HTTPS y clave de acceso
+    `-- SQLite y modelos en disco persistente
 ```
 
 El conteo general de personas se mantiene como un componente independiente con
@@ -31,7 +32,7 @@ identidades y asistencia sin computadora ni conexion a Internet.
 - Resultado `no identificado` cuando no se supera el umbral.
 - Sesiones de asistencia por clase.
 - Listas de asistencia identificadas por fecha y materia.
-- Confirmacion antes de reemplazar una lista existente para la misma fecha y materia.
+- Acumulacion de varias fotografias para la misma fecha y materia sin duplicar estudiantes.
 - Sexo registrado en el perfil del estudiante y estadisticas de asistencia masculina y femenina.
 - Directorio de todos los estudiantes registrados, con edicion de nombre y sexo
   sin modificar sus embeddings ni el historial de asistencia.
@@ -42,7 +43,7 @@ identidades y asistencia sin computadora ni conexion a Internet.
 - Registro facial guiado por video: la app valida estabilidad y captura
   automaticamente referencias frontal, de perfil, hacia arriba y hacia abajo.
 - Restriccion unica para no registrar dos veces al mismo estudiante por sesion.
-- API local para Android y documentacion interactiva en `/docs`.
+- API desplegable en la nube y documentacion interactiva en `/docs`.
 - Vista Android horizontal para registrar, reconocer y cerrar una sesion.
 - Captura CameraX de alta calidad e indicador visible durante el analisis.
 - Fotografia analizada con cajas verdes para estudiantes reconocidos, cajas
@@ -54,7 +55,7 @@ identidades y asistencia sin computadora ni conexion a Internet.
 - Base SQLite privada dentro del telefono con un maximo de cinco capturas por
   estudiante.
 - Modos `Automatico`, `Solo telefono` y `Servidor`.
-- Descubrimiento automatico de la API cuando ambos dispositivos comparten red.
+- Dominio HTTPS fijo configurado durante la compilacion de Android.
 - Recuperacion de registros antiguos del servidor: la app descarga la foto,
   genera un embedding compatible con MobileFaceNet y lo conserva en el telefono.
 
@@ -93,16 +94,14 @@ La imagen debe contener exactamente un rostro detectable. Para mejorar el
 reconocimiento con cambios de angulo e iluminacion se pueden agregar capturas
 adicionales con `--append`.
 
-## Iniciar la API
+## Iniciar la API localmente
 
 ```powershell
 .\scripts\start_api.ps1
 ```
 
-La ventana debe permanecer abierta solamente cuando se utiliza el modo
-`Servidor` o se desea el respaldo de red del modo `Automatico`.
-El script localiza el entorno virtual e inicia la API en todas las interfaces de
-red mediante el puerto `8000`.
+Este arranque se conserva para desarrollo. La aplicacion publicada utiliza el
+servidor HTTPS permanente configurado durante su compilacion.
 
 En la computadora se puede comprobar con:
 
@@ -111,22 +110,44 @@ http://127.0.0.1:8000/health
 http://127.0.0.1:8000/docs
 ```
 
-Para conectar un telefono fisico, ambos equipos deben estar en la misma red.
-Ejecuta `ipconfig`, localiza la direccion IPv4 de la computadora y escribela en
-la app, por ejemplo:
+## Servidor permanente en Render
+
+El repositorio incluye `Dockerfile`, `requirements-server.txt` y `render.yaml`.
+El Blueprint crea un servicio de 2 GB de RAM, dominio HTTPS, comprobacion en
+`/health` y un disco persistente de 5 GB para la base SQLite y los modelos.
+
+1. Crea una cuenta en Render y conecta el repositorio de GitHub.
+2. Selecciona `New > Blueprint` y el repositorio `Proyecto-de-IA`.
+3. Cuando Render solicite `ASISTENCIA_API_KEY`, ingresa una clave aleatoria de
+   al menos 32 caracteres. No la agregues al repositorio.
+4. Confirma el servicio definido en `render.yaml` y espera a que `/health`
+   responda con `status: ok`.
+5. En GitHub, abre `Settings > Secrets and variables > Actions` y configura:
+
+| Tipo | Nombre | Valor |
+| --- | --- | --- |
+| Variable | `ASISTENCIA_API_URL` | URL HTTPS asignada por Render |
+| Secreto | `ASISTENCIA_API_KEY` | La misma clave configurada en Render |
+
+La URL prevista por el Blueprint es:
 
 ```text
-http://192.168.1.25:8000
+https://proyecto-ia-asistencia-crisacosta1705.onrender.com
 ```
 
-Windows puede solicitar permiso para que Python acepte conexiones en redes
-privadas. El valor `10.0.2.2` se utiliza solamente desde el emulador Android.
+Despues de configurar la variable y el secreto, genera una nueva etiqueta para
+que GitHub compile el APK con el dominio y la clave. La clave queda incorporada
+en el APK y debe rotarse si el archivo se distribuye fuera del grupo autorizado.
+
+El disco persistente y el servicio con 2 GB requieren un plan de pago. El plan
+gratuito no es apto para datos biometricos permanentes porque su sistema de
+archivos es efimero y la instancia puede suspenderse.
 
 ## Flujo desde Android
 
 1. Selecciona `Solo telefono` para trabajar sin computadora, `Servidor` para
-   usar exclusivamente FastAPI o `Automatico` para utilizar ambos.
-2. Si ya existian estudiantes en la computadora, inicia la API una vez y pulsa
+   usar exclusivamente el servidor permanente o `Automatico` para utilizar ambos.
+2. Si ya existian estudiantes en el servidor, pulsa
    `Recuperar registros del servidor`. No se copian embeddings incompatibles:
    la aplicacion vuelve a procesar cada fotografia con el modelo del telefono.
 3. Abre `Registro`, ingresa nombre, carnet y sexo, y pulsa `Iniciar recorrido facial`.
@@ -204,6 +225,9 @@ En `Settings > Secrets and variables > Actions` del repositorio se deben crear:
 | `ANDROID_KEY_ALIAS` | Alias de la clave, por ejemplo `asistencia-ia` |
 | `ANDROID_KEY_PASSWORD` | Contrasena de la clave |
 
+El mismo apartado tambien debe contener `ASISTENCIA_API_URL` como variable y
+`ASISTENCIA_API_KEY` como secreto para conectar el APK con el servidor permanente.
+
 La clave y sus contrasenas deben conservarse para poder instalar futuras
 actualizaciones sobre una version ya distribuida. Los archivos APK, AAB, JKS y
 keystore permanecen excluidos de Git.
@@ -228,7 +252,8 @@ cd android-app
 
 ## Datos y privacidad
 
-FastAPI crea `data/processed/asistencia.db`. Android crea
+En desarrollo, FastAPI crea `data/processed/asistencia.db`; en Render utiliza
+`/var/data/asistencia.db` dentro del disco persistente. Android crea
 `asistencia_local.db` en el almacenamiento privado de la aplicacion. Ambas bases
 guardan fotografias, embeddings, identificadores, nombres y asistencias. Las
 fotografias de registro se pueden recuperar desde el servidor para regenerar

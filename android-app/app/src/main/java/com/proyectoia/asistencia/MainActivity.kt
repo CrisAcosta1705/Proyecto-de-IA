@@ -64,11 +64,7 @@ import java.io.DataOutputStream
 import java.io.File
 import java.io.IOException
 import java.net.ConnectException
-import java.net.DatagramPacket
-import java.net.DatagramSocket
 import java.net.HttpURLConnection
-import java.net.InetAddress
-import java.net.NetworkInterface
 import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
@@ -86,12 +82,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val PREFERENCES_NAME = "asistencia_ia"
         private const val LOG_TAG = "AsistenciaIA"
-        private const val SERVER_URL_KEY = "server_url"
         private const val PROCESSING_MODE_KEY = "processing_mode"
-        private const val DISCOVERY_MESSAGE = "ASISTENCIA_IA_DISCOVER_V1"
-        private const val DISCOVERY_SERVICE = "asistencia_ia"
-        private const val DISCOVERY_PORT = 8001
-        private const val DISCOVERY_TIMEOUT_MILLIS = 1_800
         private const val STATE_ACTIVE_SESSION_ID = "active_session_id"
         private const val STATE_LOCAL_SESSION_ID = "local_session_id"
         private const val STATE_LENS_FACING = "lens_facing"
@@ -466,10 +457,9 @@ class MainActivity : ComponentActivity() {
         }
 
         val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
-        val savedServerUrl = preferences.getString(SERVER_URL_KEY, null)
-        if (!savedServerUrl.isNullOrBlank()) {
-            serverUrlEditText.setText(savedServerUrl)
-        }
+        serverUrlEditText.setText(BuildConfig.API_BASE_URL)
+        serverUrlEditText.isEnabled = false
+        serverUrlEditText.isFocusable = false
 
         classSpinner.adapter = ArrayAdapter(
             this,
@@ -554,7 +544,7 @@ class MainActivity : ComponentActivity() {
         selectSection(activeSection, force = true)
         ensureCameraPermission()
         preloadLocalModel()
-        discoverApiServer(showResult = false)
+        connectFixedApiServer(showResult = false)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -3340,12 +3330,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun normalizedServerUrl(): String? {
-        val value = serverUrlEditText.text.toString().trim().trimEnd('/')
-        if (!value.startsWith("http://") && !value.startsWith("https://")) {
-            showStatus("La direccion debe iniciar con http:// o https://")
+        val value = BuildConfig.API_BASE_URL.trim().trimEnd('/')
+        if (!value.startsWith("https://")) {
+            showStatus("El servidor permanente debe utilizar HTTPS.")
             return null
         }
-        saveServerUrl(value)
         return value
     }
 
@@ -3362,48 +3351,32 @@ class MainActivity : ComponentActivity() {
 
     private fun serverUrlFor(mode: ProcessingMode): String? {
         if (mode == ProcessingMode.PHONE) return null
-        if (mode == ProcessingMode.SERVER) return normalizedServerUrl()
-
-        val value = serverUrlEditText.text.toString().trim().trimEnd('/')
-        if (!value.startsWith("http://") && !value.startsWith("https://")) return null
-        saveServerUrl(value)
-        return value
+        return normalizedServerUrl()
     }
 
     private fun networkErrorMessage(error: Exception): String {
         return when (error) {
             is ConnectException, is SocketTimeoutException -> {
-                discoverApiServer(showResult = true)
+                connectFixedApiServer(showResult = true)
                 getString(R.string.server_unreachable)
             }
             else -> error.message ?: getString(R.string.server_unreachable)
         }
     }
 
-    private fun discoverApiServer(showResult: Boolean) {
+    private fun connectFixedApiServer(showResult: Boolean) {
         if (!::networkExecutor.isInitialized || networkExecutor.isShutdown) return
         networkExecutor.execute {
-            val savedUrl = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
-                .getString(SERVER_URL_KEY, null)
-                ?.trim()
-                ?.trimEnd('/')
-            val discoveredUrl = runCatching {
-                savedUrl?.takeIf {
-                    (it.startsWith("http://") || it.startsWith("https://")) &&
-                        isHealthyServer(it)
-                } ?: findApiServer()
-            }.getOrNull()
-            if (discoveredUrl != null) {
-                saveServerUrl(discoveredUrl)
+            val serverUrl = BuildConfig.API_BASE_URL.trim().trimEnd('/')
+            val available = runCatching { isHealthyServer(serverUrl) }.getOrDefault(false)
+            if (available) {
                 runOnUiThread {
-                    val changed = serverUrlEditText.text.toString() != discoveredUrl
-                    serverUrlEditText.setText(discoveredUrl)
-                    if (showResult || changed) {
-                        showStatus(getString(R.string.server_discovered, discoveredUrl))
+                    if (showResult) {
+                        showStatus(getString(R.string.server_connected, serverUrl))
                     }
                 }
                 val syncResult = runCatching {
-                    synchronizeServerStudents(discoveredUrl, force = false)
+                    synchronizeServerStudents(serverUrl, force = false)
                 }.onFailure { error ->
                     Log.w(LOG_TAG, "No se pudieron migrar los registros antiguos.", error)
                 }.getOrNull()
@@ -3417,61 +3390,10 @@ class MainActivity : ComponentActivity() {
                         appendHistory(message)
                     }
                 }
+            } else if (showResult) {
+                runOnUiThread { showStatus(getString(R.string.server_unreachable)) }
             }
         }
-    }
-
-    private fun findApiServer(): String? {
-        val request = DISCOVERY_MESSAGE.toByteArray(Charsets.UTF_8)
-        DatagramSocket().use { socket ->
-            socket.broadcast = true
-            broadcastAddresses().forEach { address ->
-                runCatching {
-                    socket.send(DatagramPacket(request, request.size, address, DISCOVERY_PORT))
-                }
-            }
-
-            val deadline = System.currentTimeMillis() + DISCOVERY_TIMEOUT_MILLIS
-            while (System.currentTimeMillis() < deadline) {
-                val remaining = (deadline - System.currentTimeMillis()).toInt()
-                socket.soTimeout = remaining.coerceAtLeast(1)
-                val buffer = ByteArray(1024)
-                val responsePacket = DatagramPacket(buffer, buffer.size)
-                try {
-                    socket.receive(responsePacket)
-                } catch (_: SocketTimeoutException) {
-                    return null
-                }
-
-                val response = runCatching {
-                    JSONObject(
-                        String(
-                            responsePacket.data,
-                            responsePacket.offset,
-                            responsePacket.length,
-                            Charsets.UTF_8
-                        )
-                    )
-                }.getOrNull() ?: continue
-                if (response.optString("service") != DISCOVERY_SERVICE) continue
-
-                val url = response.optString("url").trim().trimEnd('/')
-                if (url.startsWith("http://") && isHealthyServer(url)) return url
-            }
-        }
-        return null
-    }
-
-    private fun broadcastAddresses(): Set<InetAddress> {
-        val addresses = linkedSetOf(InetAddress.getByName("255.255.255.255"))
-        val interfaces = NetworkInterface.getNetworkInterfaces() ?: return addresses
-        while (interfaces.hasMoreElements()) {
-            val networkInterface = interfaces.nextElement()
-            if (!networkInterface.isUp || networkInterface.isLoopback) continue
-            networkInterface.interfaceAddresses
-                .mapNotNullTo(addresses) { it.broadcast }
-        }
-        return addresses
     }
 
     private fun isHealthyServer(baseUrl: String): Boolean {
@@ -3480,6 +3402,7 @@ class MainActivity : ComponentActivity() {
             connectTimeout = 2_000
             readTimeout = 2_000
             setRequestProperty("Accept", "application/json")
+            applyApiAuthentication(this)
         }
         return try {
             if (connection.responseCode !in 200..299) return false
@@ -3488,13 +3411,6 @@ class MainActivity : ComponentActivity() {
         } finally {
             connection.disconnect()
         }
-    }
-
-    private fun saveServerUrl(url: String) {
-        getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
-            .edit()
-            .putString(SERVER_URL_KEY, url)
-            .apply()
     }
 
     private fun postJson(url: String, payload: JSONObject): JSONObject {
@@ -3565,6 +3481,7 @@ class MainActivity : ComponentActivity() {
             connectTimeout = 20_000
             readTimeout = 60_000
             setRequestProperty("Accept", "image/jpeg,image/png,image/webp")
+            applyApiAuthentication(this)
         }
         try {
             val status = connection.responseCode
@@ -3651,6 +3568,13 @@ class MainActivity : ComponentActivity() {
             doOutput = outputEnabled
             setRequestProperty("Content-Type", contentType)
             setRequestProperty("Accept", "application/json")
+            applyApiAuthentication(this)
+        }
+    }
+
+    private fun applyApiAuthentication(connection: HttpURLConnection) {
+        BuildConfig.API_KEY.takeIf { it.isNotBlank() }?.let { apiKey ->
+            connection.setRequestProperty("X-API-Key", apiKey)
         }
     }
 
