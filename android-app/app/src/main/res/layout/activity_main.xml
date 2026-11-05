@@ -10,7 +10,8 @@
         android:id="@+id/appContent"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:visibility="gone">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -150,6 +151,47 @@
                         android:layout_marginTop="10dp"
                         android:drawableStart="@android:drawable/ic_menu_upload"
                         android:text="@string/upload_students" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:background="@drawable/panel_background"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/account_label"
+                        android:textColor="@color/text_primary"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/loggedInUserText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="14sp" />
+
+                    <Button
+                        android:id="@+id/changeCredentialsButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:layout_marginTop="12dp"
+                        android:drawableStart="@android:drawable/ic_menu_edit"
+                        android:text="@string/change_access" />
+
+                    <Button
+                        android:id="@+id/logoutButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:layout_marginTop="10dp"
+                        android:drawableStart="@android:drawable/ic_lock_power_off"
+                        android:text="@string/logout"
+                        android:textColor="@color/danger" />
                 </LinearLayout>
 
                 <TextView
@@ -752,4 +794,6 @@
             android:text="@string/nav_registration" />
     </LinearLayout>
     </LinearLayout>
+
+    <include layout="@layout/screen_login" />
 </FrameLayout>

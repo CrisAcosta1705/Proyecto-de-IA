@@ -15,15 +15,18 @@ import android.media.ExifInterface
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.text.InputType
 import android.util.Log
 import android.util.Size
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -101,6 +104,19 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var classSpinner: Spinner
     private lateinit var rootLayout: FrameLayout
+    private lateinit var appContent: View
+    private lateinit var loginScreen: View
+    private lateinit var loginTitleText: TextView
+    private lateinit var loginSubtitleText: TextView
+    private lateinit var loginUsernameEditText: EditText
+    private lateinit var loginPasswordEditText: EditText
+    private lateinit var loginConfirmPasswordEditText: EditText
+    private lateinit var confirmPasswordLabel: TextView
+    private lateinit var showPasswordCheckBox: CheckBox
+    private lateinit var loginErrorText: TextView
+    private lateinit var loginButton: Button
+    private lateinit var cancelCredentialChangeButton: Button
+    private lateinit var loggedInUserText: TextView
     private lateinit var processingModeSpinner: Spinner
     private lateinit var serverUrlEditText: EditText
     private lateinit var attendanceDateEditText: EditText
@@ -144,6 +160,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var networkExecutor: ExecutorService
     private lateinit var localStore: LocalAttendanceStore
+    private lateinit var authStore: LocalAuthStore
 
     private val isAnalyzing = AtomicBoolean(false)
     private val isNetworkBusy = AtomicBoolean(false)
@@ -169,6 +186,8 @@ class MainActivity : ComponentActivity() {
     private var guidedContext: GuidedRegistrationContext? = null
     private var pendingGalleryUpdateContext: GuidedRegistrationContext? = null
     private var currentStudentProfiles: List<StudentProfileData> = emptyList()
+    private var authMode = AuthMode.LOGIN
+    private var appServicesStarted = false
     private val hideRecognitionResult = Runnable {
         isShowingRecognitionResult.set(false)
         capturedImageView.setImageDrawable(null)
@@ -210,6 +229,12 @@ class MainActivity : ComponentActivity() {
         AUTOMATIC,
         PHONE,
         SERVER
+    }
+
+    private enum class AuthMode {
+        LOGIN,
+        INITIAL_SETUP,
+        CHANGE_CREDENTIALS
     }
 
     private enum class AppSection {
@@ -326,7 +351,7 @@ class MainActivity : ComponentActivity() {
     private val requestCameraPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) startCamera()
+        if (granted && authStore.isSessionActive()) startCamera()
         else statusText.text = getString(R.string.camera_permission_denied)
     }
 
@@ -356,6 +381,19 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         rootLayout = findViewById(R.id.rootLayout)
+        appContent = findViewById(R.id.appContent)
+        loginScreen = findViewById(R.id.loginScreen)
+        loginTitleText = findViewById(R.id.loginTitleText)
+        loginSubtitleText = findViewById(R.id.loginSubtitleText)
+        loginUsernameEditText = findViewById(R.id.loginUsernameEditText)
+        loginPasswordEditText = findViewById(R.id.loginPasswordEditText)
+        loginConfirmPasswordEditText = findViewById(R.id.loginConfirmPasswordEditText)
+        confirmPasswordLabel = findViewById(R.id.confirmPasswordLabel)
+        showPasswordCheckBox = findViewById(R.id.showPasswordCheckBox)
+        loginErrorText = findViewById(R.id.loginErrorText)
+        loginButton = findViewById(R.id.loginButton)
+        cancelCredentialChangeButton = findViewById(R.id.cancelCredentialChangeButton)
+        loggedInUserText = findViewById(R.id.loggedInUserText)
         ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
@@ -430,6 +468,7 @@ class MainActivity : ComponentActivity() {
         cameraExecutor = Executors.newSingleThreadExecutor()
         networkExecutor = Executors.newSingleThreadExecutor()
         localStore = LocalAttendanceStore(applicationContext)
+        authStore = LocalAuthStore(applicationContext)
         localStore.writableDatabase
 
         if (savedInstanceState != null) {
@@ -491,6 +530,30 @@ class MainActivity : ComponentActivity() {
         }
         attendanceDateEditText.setOnClickListener { showAttendanceDatePicker() }
 
+        loginButton.setOnClickListener { submitAuthentication() }
+        cancelCredentialChangeButton.setOnClickListener {
+            showAuthenticatedApp()
+        }
+        showPasswordCheckBox.setOnCheckedChangeListener { _, checked ->
+            setPasswordsVisible(checked)
+        }
+        loginPasswordEditText.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE && authMode == AuthMode.LOGIN) {
+                submitAuthentication()
+                true
+            } else {
+                false
+            }
+        }
+        loginConfirmPasswordEditText.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                submitAuthentication()
+                true
+            } else {
+                false
+            }
+        }
+
         findViewById<Button>(R.id.registerButton).setOnClickListener {
             showGuidedRegistrationConditions()
         }
@@ -519,6 +582,12 @@ class MainActivity : ComponentActivity() {
         findViewById<Button>(R.id.uploadStudentsButton).setOnClickListener {
             confirmLocalStudentsUpload()
         }
+        findViewById<Button>(R.id.changeCredentialsButton).setOnClickListener {
+            showAuthenticationScreen(AuthMode.CHANGE_CREDENTIALS)
+        }
+        findViewById<Button>(R.id.logoutButton).setOnClickListener {
+            confirmLogout()
+        }
         findViewById<Button>(R.id.scanButton).setOnClickListener {
             recognizeAttendance()
         }
@@ -539,6 +608,14 @@ class MainActivity : ComponentActivity() {
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (loginScreen.visibility == View.VISIBLE) {
+                    if (authMode == AuthMode.CHANGE_CREDENTIALS) {
+                        showAuthenticatedApp()
+                    } else {
+                        finish()
+                    }
+                    return
+                }
                 when (fullscreenCameraMode) {
                     FullscreenCameraMode.REGISTRATION -> cancelGuidedRegistration()
                     FullscreenCameraMode.ATTENDANCE -> exitCameraFullscreen()
@@ -550,10 +627,13 @@ class MainActivity : ComponentActivity() {
             }
         })
 
-        selectSection(activeSection, force = true)
-        ensureCameraPermission()
-        preloadLocalModel()
-        connectFixedApiServer(showResult = false)
+        if (authStore.isSessionActive()) {
+            showAuthenticatedApp()
+        } else {
+            showAuthenticationScreen(
+                if (authStore.isConfigured()) AuthMode.LOGIN else AuthMode.INITIAL_SETUP
+            )
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -568,7 +648,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        rootLayout.post { rebindCameraForSection() }
+        if (authStore.isSessionActive()) {
+            rootLayout.post { rebindCameraForSection() }
+        }
     }
 
     override fun onDestroy() {
@@ -583,6 +665,153 @@ class MainActivity : ComponentActivity() {
         }
         cameraExecutor.shutdown()
         networkExecutor.shutdown()
+    }
+
+    private fun showAuthenticationScreen(mode: AuthMode) {
+        authMode = mode
+        cameraProvider?.unbindAll()
+        appContent.visibility = View.GONE
+        loginScreen.visibility = View.VISIBLE
+        loginErrorText.text = ""
+        loginPasswordEditText.text.clear()
+        loginConfirmPasswordEditText.text.clear()
+        showPasswordCheckBox.isChecked = false
+
+        val configuringAccess = mode != AuthMode.LOGIN
+        confirmPasswordLabel.visibility = if (configuringAccess) View.VISIBLE else View.GONE
+        loginConfirmPasswordEditText.visibility = if (configuringAccess) View.VISIBLE else View.GONE
+        cancelCredentialChangeButton.visibility = if (
+            mode == AuthMode.CHANGE_CREDENTIALS
+        ) View.VISIBLE else View.GONE
+
+        when (mode) {
+            AuthMode.LOGIN -> {
+                loginTitleText.setText(R.string.login_title)
+                loginSubtitleText.setText(R.string.login_subtitle)
+                loginButton.setText(R.string.sign_in)
+                loginUsernameEditText.setText(authStore.username())
+            }
+            AuthMode.INITIAL_SETUP -> {
+                loginTitleText.setText(R.string.setup_access_title)
+                loginSubtitleText.setText(R.string.setup_access_subtitle)
+                loginButton.setText(R.string.create_access)
+                loginUsernameEditText.text.clear()
+            }
+            AuthMode.CHANGE_CREDENTIALS -> {
+                loginTitleText.setText(R.string.change_access_title)
+                loginSubtitleText.setText(R.string.change_access_subtitle)
+                loginButton.setText(R.string.save_new_access)
+                loginUsernameEditText.setText(authStore.username())
+            }
+        }
+
+        loginScreen.post {
+            val target = if (loginUsernameEditText.text.isNullOrBlank()) {
+                loginUsernameEditText
+            } else {
+                loginPasswordEditText
+            }
+            target.requestFocus()
+        }
+    }
+
+    private fun submitAuthentication() {
+        val username = loginUsernameEditText.text.toString().trim()
+        val password = loginPasswordEditText.text.toString()
+        loginErrorText.text = ""
+
+        if (authMode == AuthMode.LOGIN) {
+            if (username.isBlank() || password.isBlank()) {
+                loginErrorText.setText(R.string.authentication_required)
+                return
+            }
+            val attempt = authStore.authenticate(username, password.toCharArray())
+            loginPasswordEditText.text.clear()
+            when {
+                attempt.authenticated -> showAuthenticatedApp()
+                attempt.lockedForSeconds > 0 -> loginErrorText.text = getString(
+                    R.string.login_temporarily_locked,
+                    attempt.lockedForSeconds
+                )
+                else -> loginErrorText.text = getString(
+                    R.string.invalid_credentials,
+                    attempt.remainingAttempts
+                )
+            }
+            return
+        }
+
+        val confirmation = loginConfirmPasswordEditText.text.toString()
+        when {
+            username.length !in 3..40 -> {
+                loginErrorText.setText(R.string.username_invalid)
+            }
+            password.length < 8 -> {
+                loginErrorText.setText(R.string.password_invalid)
+            }
+            password != confirmation -> {
+                loginErrorText.setText(R.string.passwords_do_not_match)
+            }
+            else -> {
+                authStore.createOrReplace(username, password.toCharArray())
+                val message = if (authMode == AuthMode.INITIAL_SETUP) {
+                    getString(R.string.access_created)
+                } else {
+                    getString(R.string.access_updated)
+                }
+                loginPasswordEditText.text.clear()
+                loginConfirmPasswordEditText.text.clear()
+                showAuthenticatedApp(message)
+            }
+        }
+    }
+
+    private fun showAuthenticatedApp(message: String? = null) {
+        hideKeyboard()
+        loginScreen.visibility = View.GONE
+        appContent.visibility = View.VISIBLE
+        loggedInUserText.text = getString(R.string.logged_in_user, authStore.username())
+        selectSection(activeSection, force = true)
+        if (!appServicesStarted) {
+            appServicesStarted = true
+            ensureCameraPermission()
+            preloadLocalModel()
+            connectFixedApiServer(showResult = false)
+        }
+        message?.let(::showStatus)
+    }
+
+    private fun confirmLogout() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.logout_title)
+            .setMessage(R.string.logout_message)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.logout) { _, _ ->
+                authStore.logout()
+                showAuthenticationScreen(AuthMode.LOGIN)
+            }
+            .show()
+    }
+
+    private fun setPasswordsVisible(visible: Boolean) {
+        val inputType = InputType.TYPE_CLASS_TEXT or if (visible) {
+            InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        } else {
+            InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        listOf(loginPasswordEditText, loginConfirmPasswordEditText).forEach { field ->
+            val cursor = field.selectionStart.coerceAtLeast(0)
+            field.inputType = inputType
+            field.setSelection(cursor.coerceAtMost(field.text.length))
+        }
+    }
+
+    private fun hideKeyboard() {
+        currentFocus?.let { focused ->
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                .hideSoftInputFromWindow(focused.windowToken, 0)
+            focused.clearFocus()
+        }
     }
 
     private fun preloadLocalModel() {
@@ -794,6 +1023,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun rebindCameraForSection() {
+        if (!authStore.isSessionActive() || appContent.visibility != View.VISIBLE) return
         val provider = cameraProvider ?: return
         if (
             activeSection == AppSection.ATTENDANCE ||
@@ -822,6 +1052,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startCamera() {
+        if (!authStore.isSessionActive()) return
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             cameraProvider = cameraProviderFuture.get()
@@ -3002,13 +3233,17 @@ class MainActivity : ComponentActivity() {
                 val message = if (
                     serverSessionId != null && !serverFinished && localFinished
                 ) {
-                    "Sesion local cerrada; el cierre del servidor queda pendiente."
+                    "Asistencia local finalizada; el servidor queda pendiente."
                 } else {
                     getString(R.string.session_finished)
                 }
                 showStatus(message)
-                if (localFinished) appendHistory("Sesion local $localSessionId cerrada")
-                if (serverFinished) appendHistory("Sesion del servidor $serverSessionId cerrada")
+                if (localFinished) {
+                    appendHistory("Asistencia local $localSessionId finalizada")
+                }
+                if (serverFinished) {
+                    appendHistory("Asistencia del servidor $serverSessionId finalizada")
+                }
             }
         }
     }

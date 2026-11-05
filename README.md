@@ -60,6 +60,8 @@ identidades y asistencia sin computadora ni conexion a Internet.
   genera un embedding compatible con MobileFaceNet y lo conserva en el telefono.
 - Subida manual de estudiantes y referencias faciales locales al servidor, con
   validacion individual y confirmacion antes de reemplazar referencias remotas.
+- Acceso administrativo local con contrasena protegida mediante PBKDF2, bloqueo
+  temporal por intentos fallidos y cierre de sesion sin borrar datos.
 
 ## Preparar Python
 
@@ -160,24 +162,27 @@ servicio antes de cambiar `INSIGHTFACE_MODEL`.
 
 ## Flujo desde Android
 
-1. Selecciona `Solo telefono` para trabajar sin computadora, `Servidor` para
+1. En el primer inicio, crea el usuario y la contrasena de administracion del
+   dispositivo. En los inicios posteriores utiliza esas credenciales.
+2. Selecciona `Solo telefono` para trabajar sin computadora, `Servidor` para
    usar exclusivamente el servidor permanente o `Automatico` para utilizar ambos.
-2. Si ya existian estudiantes en el servidor, pulsa
+3. Si ya existian estudiantes en el servidor, pulsa
    `Recuperar registros del servidor`. No se copian embeddings incompatibles:
    la aplicacion vuelve a procesar cada fotografia con el modelo del telefono.
-3. Para respaldar en el servidor los rostros guardados solamente en el telefono,
+4. Para respaldar en el servidor los rostros guardados solamente en el telefono,
    abre `Config.`, pulsa `Subir registros del telefono` y confirma la operacion.
-4. Abre `Registro`, ingresa nombre, carnet y sexo, y pulsa `Iniciar recorrido facial`.
-5. Mueve el rostro siguiendo las indicaciones: frontal, perfil, arriba y abajo.
+5. Abre `Registro`, ingresa nombre, carnet y sexo, y pulsa `Iniciar recorrido facial`.
+6. Mueve el rostro siguiendo las indicaciones: frontal, perfil, arriba y abajo.
    La app analiza el video, exige varios frames estables y guarda automaticamente
    una referencia clara por posicion.
-6. Abre `Asistencia`, selecciona materia y fecha, y pulsa `Reconocer asistencia`.
-7. Puedes tomar varias fotografias para la misma materia y fecha. Cada captura
+7. Abre `Asistencia`, selecciona materia y fecha, y pulsa `Reconocer asistencia`.
+8. Puedes tomar varias fotografias para la misma materia y fecha. Cada captura
    agrega estudiantes nuevos y conserva una sola asistencia por carnet.
-8. Abre `Historial` para consultar todas las listas y sus estadisticas por sexo.
-9. Abre `Estudiantes` para ver la tabla de rostros, editar perfiles o eliminar
+9. Abre `Historial` para consultar todas las listas y sus estadisticas por sexo.
+10. Abre `Estudiantes` para ver la tabla de rostros, editar perfiles o eliminar
    datos biometricos sin borrar asistencias historicas.
-10. Pulsa `Cerrar sesion` al terminar una toma de asistencia.
+11. Pulsa `Finalizar asistencia` al terminar las capturas de una clase. Para salir
+    de la cuenta, abre `Config.` y pulsa `Cerrar sesion`.
 
 Para borrar un registro facial, escribe el carnet, pulsa
 `Eliminar reconocimiento` y confirma el dialogo. La fotografia y los embeddings
@@ -278,6 +283,11 @@ embeddings locales. La app tambien permite subir manualmente al servidor los
 perfiles y referencias guardados en el telefono, pero las asistencias historicas
 no se sincronizan automaticamente. Android tiene deshabilitado el respaldo del
 sistema para evitar copiar biometria a la nube.
+
+El login administrativo es local al dispositivo. La contrasena no se guarda en
+texto plano: se conserva un hash PBKDF2 con sal aleatoria. Este acceso protege la
+interfaz y los datos locales; la API de produccion utiliza ademas su propia clave
+tecnica enviada por el APK firmado.
 
 El APK incluye el modelo ligero `w600k_mbf.onnx` del paquete oficial
 `buffalo_sc`. Los modelos preentrenados de InsightFace son para investigacion no
