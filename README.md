@@ -58,6 +58,8 @@ identidades y asistencia sin computadora ni conexion a Internet.
 - Dominio HTTPS fijo configurado durante la compilacion de Android.
 - Recuperacion de registros antiguos del servidor: la app descarga la foto,
   genera un embedding compatible con MobileFaceNet y lo conserva en el telefono.
+- Subida manual de estudiantes y referencias faciales locales al servidor, con
+  validacion individual y confirmacion antes de reemplazar referencias remotas.
 
 ## Preparar Python
 
@@ -163,17 +165,19 @@ servicio antes de cambiar `INSIGHTFACE_MODEL`.
 2. Si ya existian estudiantes en el servidor, pulsa
    `Recuperar registros del servidor`. No se copian embeddings incompatibles:
    la aplicacion vuelve a procesar cada fotografia con el modelo del telefono.
-3. Abre `Registro`, ingresa nombre, carnet y sexo, y pulsa `Iniciar recorrido facial`.
-4. Mueve el rostro siguiendo las indicaciones: frontal, perfil, arriba y abajo.
+3. Para respaldar en el servidor los rostros guardados solamente en el telefono,
+   abre `Config.`, pulsa `Subir registros del telefono` y confirma la operacion.
+4. Abre `Registro`, ingresa nombre, carnet y sexo, y pulsa `Iniciar recorrido facial`.
+5. Mueve el rostro siguiendo las indicaciones: frontal, perfil, arriba y abajo.
    La app analiza el video, exige varios frames estables y guarda automaticamente
    una referencia clara por posicion.
-5. Abre `Asistencia`, selecciona materia y fecha, y pulsa `Reconocer asistencia`.
-6. Puedes tomar varias fotografias para la misma materia y fecha. Cada captura
+6. Abre `Asistencia`, selecciona materia y fecha, y pulsa `Reconocer asistencia`.
+7. Puedes tomar varias fotografias para la misma materia y fecha. Cada captura
    agrega estudiantes nuevos y conserva una sola asistencia por carnet.
-7. Abre `Historial` para consultar todas las listas y sus estadisticas por sexo.
-8. Abre `Estudiantes` para ver la tabla de rostros, editar perfiles o eliminar
+8. Abre `Historial` para consultar todas las listas y sus estadisticas por sexo.
+9. Abre `Estudiantes` para ver la tabla de rostros, editar perfiles o eliminar
    datos biometricos sin borrar asistencias historicas.
-9. Pulsa `Cerrar sesion` al terminar una toma de asistencia.
+10. Pulsa `Cerrar sesion` al terminar una toma de asistencia.
 
 Para borrar un registro facial, escribe el carnet, pulsa
 `Eliminar reconocimiento` y confirma el dialogo. La fotografia y los embeddings
@@ -270,9 +274,10 @@ En desarrollo, FastAPI crea `data/processed/asistencia.db`; en Railway utiliza
 `asistencia_local.db` en el almacenamiento privado de la aplicacion. Ambas bases
 guardan fotografias, embeddings, identificadores, nombres y asistencias. Las
 fotografias de registro se pueden recuperar desde el servidor para regenerar
-embeddings locales, pero las asistencias historicas no se sincronizan
-automaticamente. Android tiene deshabilitado el respaldo del sistema para evitar
-copiar biometria a la nube.
+embeddings locales. La app tambien permite subir manualmente al servidor los
+perfiles y referencias guardados en el telefono, pero las asistencias historicas
+no se sincronizan automaticamente. Android tiene deshabilitado el respaldo del
+sistema para evitar copiar biometria a la nube.
 
 El APK incluye el modelo ligero `w600k_mbf.onnx` del paquete oficial
 `buffalo_sc`. Los modelos preentrenados de InsightFace son para investigacion no

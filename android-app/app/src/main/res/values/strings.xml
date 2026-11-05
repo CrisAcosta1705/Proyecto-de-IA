@@ -67,6 +67,15 @@
     <string name="syncing_students">Recuperando registros faciales anteriores...</string>
     <string name="students_synced">Sincronizacion terminada: %1$d recuperados, %2$d sin cambios y %3$d con error.</string>
     <string name="automatic_students_synced">%1$d registros anteriores ya estan disponibles en este telefono.</string>
+    <string name="upload_students">Subir registros del telefono</string>
+    <string name="upload_students_title">Subir rostros al servidor</string>
+    <string name="upload_students_confirmation">Se subiran %1$d de %2$d estudiantes locales. Por cada estudiante validado, las referencias faciales del servidor se reemplazaran por las guardadas en este telefono. Los registros remotos no se modificaran si alguna foto no supera la validacion.</string>
+    <string name="upload_to_server">Subir al servidor</string>
+    <string name="upload_students_progress">Subiendo %1$d de %2$d: %3$s</string>
+    <string name="students_uploaded">Subida terminada: %1$d enviados, %2$d omitidos y %3$d con error.</string>
+    <string name="no_local_students_to_upload">No hay estudiantes registrados en este telefono.</string>
+    <string name="no_valid_local_students_to_upload">No hay estudiantes con referencias faciales y sexo registrado para subir.</string>
+    <string name="upload_students_failed">No se pudieron preparar los registros locales.</string>
     <string name="invalid_registration">Ingresa identificador, nombre y sexo antes de registrar.</string>
     <string name="registration_complete">Captura registrada para %1$s.</string>
     <string name="local_registration_complete">Captura registrada en este telefono para %1$s.</string>

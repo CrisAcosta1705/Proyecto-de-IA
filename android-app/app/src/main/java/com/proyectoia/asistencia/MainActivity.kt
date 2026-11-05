@@ -268,6 +268,12 @@ class MainActivity : ComponentActivity() {
         val failed: Int
     )
 
+    private data class ServerStudentUploadResult(
+        val uploaded: Int,
+        val skipped: Int,
+        val failed: Int
+    )
+
     private data class AttendanceSelection(
         val course: String,
         val attendanceDate: String,
@@ -509,6 +515,9 @@ class MainActivity : ComponentActivity() {
         }
         findViewById<Button>(R.id.syncStudentsButton).setOnClickListener {
             syncConfiguredServerStudents()
+        }
+        findViewById<Button>(R.id.uploadStudentsButton).setOnClickListener {
+            confirmLocalStudentsUpload()
         }
         findViewById<Button>(R.id.scanButton).setOnClickListener {
             recognizeAttendance()
@@ -2482,6 +2491,106 @@ class MainActivity : ComponentActivity() {
                     R.string.students_synced,
                     result.imported,
                     result.unchanged,
+                    result.failed
+                )
+                showStatus(message)
+                appendHistory(message)
+            }
+        }
+    }
+
+    private fun confirmLocalStudentsUpload() {
+        val students = runCatching { localStore.listStudentsForServerUpload() }
+            .getOrElse { error ->
+                showStatus(error.message ?: getString(R.string.upload_students_failed))
+                return
+            }
+        val eligible = students.count {
+            it.referenceCount > 0 && (it.sex == SEX_MALE || it.sex == SEX_FEMALE)
+        }
+        if (students.isEmpty()) {
+            showStatus(getString(R.string.no_local_students_to_upload))
+            return
+        }
+        if (eligible == 0) {
+            showStatus(getString(R.string.no_valid_local_students_to_upload))
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.upload_students_title)
+            .setMessage(
+                getString(
+                    R.string.upload_students_confirmation,
+                    eligible,
+                    students.size
+                )
+            )
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.upload_to_server) { _, _ ->
+                uploadLocalStudentsToServer()
+            }
+            .show()
+    }
+
+    private fun uploadLocalStudentsToServer() {
+        val serverUrl = normalizedServerUrl() ?: return
+        runNetworkRequest {
+            if (!isHealthyServer(serverUrl)) {
+                throw ConnectException(getString(R.string.server_unreachable))
+            }
+            val students = localStore.listStudentsForServerUpload()
+            var uploaded = 0
+            var skipped = 0
+            var failed = 0
+
+            students.forEachIndexed { index, student ->
+                if (
+                    student.referenceCount == 0 ||
+                    (student.sex != SEX_MALE && student.sex != SEX_FEMALE)
+                ) {
+                    skipped++
+                    return@forEachIndexed
+                }
+                showStatus(
+                    getString(
+                        R.string.upload_students_progress,
+                        index + 1,
+                        students.size,
+                        student.name
+                    )
+                )
+                try {
+                    val photos = localStore.facePhotosForServerUpload(student.studentId)
+                    if (photos.isEmpty()) {
+                        skipped++
+                        return@forEachIndexed
+                    }
+                    registerOnServer(
+                        serverUrl,
+                        student.studentId,
+                        student.name,
+                        student.sex,
+                        photos,
+                        replace = true
+                    )
+                    uploaded++
+                } catch (error: Exception) {
+                    failed++
+                    Log.w(
+                        LOG_TAG,
+                        "No se pudo subir el registro local de ${student.studentId}.",
+                        error
+                    )
+                }
+            }
+
+            val result = ServerStudentUploadResult(uploaded, skipped, failed)
+            runOnUiThread {
+                val message = getString(
+                    R.string.students_uploaded,
+                    result.uploaded,
+                    result.skipped,
                     result.failed
                 )
                 showStatus(message)

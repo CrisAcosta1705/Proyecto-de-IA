@@ -26,6 +26,13 @@ data class LocalStudentProfile(
     val photoJpeg: ByteArray?
 )
 
+data class LocalStudentServerUpload(
+    val studentId: String,
+    val name: String,
+    val sex: String,
+    val referenceCount: Int
+)
+
 data class LegacyFaceReference(
     val embeddingId: Long,
     val studentId: String,
@@ -359,6 +366,48 @@ class LocalAttendanceStore(context: Context) :
                         )
                     )
                 }
+            }
+        }
+    }
+
+    fun listStudentsForServerUpload(): List<LocalStudentServerUpload> {
+        return readableDatabase.rawQuery(
+            """
+            SELECT s.student_id, s.name, s.sex, COUNT(e.id) AS reference_count
+            FROM students s
+            LEFT JOIN face_embeddings e ON e.student_id = s.student_id
+            GROUP BY s.student_id, s.name, s.sex
+            ORDER BY s.name COLLATE NOCASE, s.student_id
+            """.trimIndent(),
+            emptyArray()
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(
+                        LocalStudentServerUpload(
+                            studentId = cursor.getString(0),
+                            name = cursor.getString(1),
+                            sex = cursor.getString(2),
+                            referenceCount = cursor.getInt(3)
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun facePhotosForServerUpload(studentId: String): List<ByteArray> {
+        return readableDatabase.query(
+            "face_embeddings",
+            arrayOf("photo_jpeg"),
+            "student_id = ?",
+            arrayOf(studentId.trim()),
+            null,
+            null,
+            "id ASC"
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(cursor.getBlob(0))
             }
         }
     }
