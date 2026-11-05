@@ -8,7 +8,7 @@ on:
     paths:
       - "Dockerfile"
       - ".dockerignore"
-      - "render.yaml"
+      - ".railway/**"
       - "requirements-server.txt"
       - "pyproject.toml"
       - "src/**"
@@ -19,7 +19,7 @@ on:
     paths:
       - "Dockerfile"
       - ".dockerignore"
-      - "render.yaml"
+      - ".railway/**"
       - "requirements-server.txt"
       - "pyproject.toml"
       - "src/**"

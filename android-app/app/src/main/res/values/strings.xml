@@ -3,7 +3,7 @@
     <string name="app_name">Asistencia IA</string>
     <string name="app_subtitle">Conteo y reconocimiento autorizado de estudiantes.</string>
     <string name="server_label">Servidor de IA</string>
-    <string name="server_url_default">https://proyecto-ia-asistencia-crisacosta1705.onrender.com</string>
+    <string name="server_url_default">Servidor permanente no configurado</string>
     <string name="processing_mode_label">Procesamiento</string>
     <string-array name="processing_modes">
         <item>Automatico</item>

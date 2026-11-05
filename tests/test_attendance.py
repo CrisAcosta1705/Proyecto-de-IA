@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -197,6 +198,18 @@ class AttendanceServiceTest(unittest.TestCase):
         self.assertEqual(health.status_code, 200)
         self.assertEqual(unauthorized.status_code, 401)
         self.assertEqual(authorized.status_code, 200)
+
+    def test_railway_requires_api_key(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"RAILWAY_PROJECT_ID": "project-test", "ASISTENCIA_API_KEY": ""},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "ASISTENCIA_API_KEY"):
+                create_app(
+                    database_path=self.database.path,
+                    extractor=self.extractor,
+                    similarity_threshold=0.8,
+                )
 
     def test_api_edits_student_profile_without_changing_biometrics(self) -> None:
         self.extractor.faces = [_face([1.0, 0.0])]

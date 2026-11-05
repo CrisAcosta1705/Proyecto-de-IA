@@ -110,40 +110,39 @@ http://127.0.0.1:8000/health
 http://127.0.0.1:8000/docs
 ```
 
-## Servidor permanente en Render
+## Servidor permanente en Railway
 
-El repositorio incluye `Dockerfile`, `requirements-server.txt` y `render.yaml`.
-El Blueprint crea un servicio de 2 GB de RAM, dominio HTTPS, comprobacion en
-`/health` y un disco persistente de 5 GB para la base SQLite y los modelos.
+El repositorio incluye `Dockerfile`, `requirements-server.txt` y la definicion
+de infraestructura `.railway/railway.ts`. Railway crea el servicio en la region
+US East, comprueba `/health` y monta un volumen persistente de 5 GB en
+`/var/data` para la base SQLite, las fotografias y los modelos.
 
-[![Desplegar en Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/CrisAcosta1705/Proyecto-de-IA)
-
-1. Crea una cuenta en Render y conecta el repositorio de GitHub.
-2. Selecciona `New > Blueprint` y el repositorio `Proyecto-de-IA`.
-3. Cuando Render solicite `ASISTENCIA_API_KEY`, ingresa una clave aleatoria de
-   al menos 32 caracteres. No la agregues al repositorio.
-4. Confirma el servicio definido en `render.yaml` y espera a que `/health`
-   responda con `status: ok`.
-5. En GitHub, abre `Settings > Secrets and variables > Actions` y configura:
+1. Instala la CLI con `npm install --global @railway/cli` y ejecuta
+   `railway login`.
+2. Desde la raiz del repositorio ejecuta `railway init --name asistencia-ia`.
+3. Ejecuta `railway config apply` para crear `asistencia-api` y su volumen. El
+   primer arranque permanecera bloqueado hasta configurar la clave.
+4. Configura `ASISTENCIA_API_KEY` con una clave aleatoria de al menos 32
+   caracteres mediante `railway variable set ASISTENCIA_API_KEY=CLAVE --service
+   asistencia-api`. No agregues la clave al repositorio.
+5. Ejecuta `railway redeploy --service asistencia-api`.
+6. Genera el dominio HTTPS con `railway domain --service asistencia-api` y
+   comprueba que `https://DOMINIO/health` responda con `status: ok`.
+7. En GitHub, abre `Settings > Secrets and variables > Actions` y configura:
 
 | Tipo | Nombre | Valor |
 | --- | --- | --- |
-| Variable | `ASISTENCIA_API_URL` | URL HTTPS asignada por Render |
-| Secreto | `ASISTENCIA_API_KEY` | La misma clave configurada en Render |
-
-La URL prevista por el Blueprint es:
-
-```text
-https://proyecto-ia-asistencia-crisacosta1705.onrender.com
-```
+| Variable | `ASISTENCIA_API_URL` | URL HTTPS `*.up.railway.app` asignada por Railway |
+| Secreto | `ASISTENCIA_API_KEY` | La misma clave configurada en Railway |
 
 Despues de configurar la variable y el secreto, genera una nueva etiqueta para
 que GitHub compile el APK con el dominio y la clave. La clave queda incorporada
 en el APK y debe rotarse si el archivo se distribuye fuera del grupo autorizado.
 
-El disco persistente y el servicio con 2 GB requieren un plan de pago. El plan
-gratuito no es apto para datos biometricos permanentes porque su sistema de
-archivos es efimero y la instancia puede suspenderse.
+El proyecto debe mantener una sola replica mientras use SQLite. El volumen evita
+que los registros desaparezcan al desplegar una nueva version, pero se recomienda
+activar copias de seguridad y revisar los costos del plan antes de almacenar
+datos biometricos reales.
 
 ## Flujo desde Android
 
@@ -254,7 +253,7 @@ cd android-app
 
 ## Datos y privacidad
 
-En desarrollo, FastAPI crea `data/processed/asistencia.db`; en Render utiliza
+En desarrollo, FastAPI crea `data/processed/asistencia.db`; en Railway utiliza
 `/var/data/asistencia.db` dentro del disco persistente. Android crea
 `asistencia_local.db` en el almacenamiento privado de la aplicacion. Ambas bases
 guardan fotografias, embeddings, identificadores, nombres y asistencias. Las
@@ -267,9 +266,9 @@ El APK incluye el modelo ligero `w600k_mbf.onnx` del paquete oficial
 `buffalo_sc`. Los modelos preentrenados de InsightFace son para investigacion no
 comercial; un uso comercial requiere una licencia separada.
 
-Este prototipo todavia no incluye cifrado de SQLite, autenticacion de la API,
-HTTPS ni deteccion de fotografias impresas o pantallas. Debe usarse solo en una
-red privada y con consentimiento. Antes de utilizarlo para decisiones oficiales
-es necesario validar el umbral con el dataset del proyecto y agregar controles
-de seguridad, cifrado y deteccion de suplantacion. La informacion biometrica y
-academica debe eliminarse cuando ya no sea necesaria.
+La API en Railway utiliza HTTPS y una clave enviada en `X-API-Key`, pero SQLite
+todavia no esta cifrada y el prototipo no detecta fotografias impresas o
+pantallas. Debe usarse con consentimiento. Antes de utilizarlo para decisiones
+oficiales es necesario validar el umbral con el dataset del proyecto, rotar la
+clave periodicamente y agregar cifrado y deteccion de suplantacion. La
+informacion biometrica y academica debe eliminarse cuando ya no sea necesaria.

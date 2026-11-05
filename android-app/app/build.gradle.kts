@@ -16,7 +16,7 @@ val asistenciaApiUrl = System.getenv("ASISTENCIA_API_URL")
     ?.trim()
     ?.trimEnd('/')
     ?.takeIf { it.startsWith("https://") }
-    ?: "https://proyecto-ia-asistencia-crisacosta1705.onrender.com"
+    .orEmpty()
 val asistenciaApiKey = System.getenv("ASISTENCIA_API_KEY")?.trim().orEmpty()
 val hasReleaseSigning = listOf(
     releaseKeystorePath,

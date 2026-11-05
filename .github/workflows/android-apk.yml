@@ -59,6 +59,19 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "name=$version_name" >> "$GITHUB_OUTPUT"
 
+      - name: Verificar servidor de produccion
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          if [[ ! "$ASISTENCIA_API_URL" =~ ^https:// ]]; then
+            echo "Configura la variable ASISTENCIA_API_URL con el dominio HTTPS de Railway."
+            exit 1
+          fi
+          if [[ -z "$ASISTENCIA_API_KEY" ]]; then
+            echo "Configura el secreto ASISTENCIA_API_KEY con la clave definida en Railway."
+            exit 1
+          fi
+
       - name: Preparar firma
         id: signing
         shell: bash

@@ -68,6 +68,10 @@ def create_app(
     configured_api_key = (
         api_key if api_key is not None else os.environ.get("ASISTENCIA_API_KEY", "")
     ).strip()
+    if os.environ.get("RAILWAY_PROJECT_ID") and not configured_api_key:
+        raise RuntimeError(
+            "ASISTENCIA_API_KEY debe estar configurada para ejecutar la API en Railway."
+        )
 
     app = FastAPI(
         title="Asistencia estudiantil con IA",
