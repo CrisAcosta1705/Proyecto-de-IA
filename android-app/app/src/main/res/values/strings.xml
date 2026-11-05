@@ -79,9 +79,6 @@
     <string name="no_active_session">No hay una sesion activa.</string>
     <string name="history_label">Resultados de asistencia</string>
     <string name="analyzed_photo">Fotografia analizada con resultados faciales</string>
-    <string name="attendance_overwrite_title">Asistencia existente</string>
-    <string name="attendance_overwrite_message">Ya existe una lista para %1$s el %2$s con %3$d estudiantes. ¿Deseas reemplazarla con una nueva fotografia?</string>
-    <string name="overwrite">Sobreescribir</string>
     <string name="attendance_report_title">Lista de asistencia</string>
     <string name="attendance_empty">No hay estudiantes registrados para esta fecha y materia.</string>
     <string name="close">Cerrar</string>

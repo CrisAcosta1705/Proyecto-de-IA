@@ -117,7 +117,6 @@ class AttendanceService:
         self,
         course: str,
         attendance_date: str | None = None,
-        overwrite: bool = False,
     ) -> int:
         course = course.strip()
         if not 2 <= len(course) <= 100:
@@ -127,7 +126,7 @@ class AttendanceService:
             date.fromisoformat(selected_date)
         except ValueError as error:
             raise ValueError("La fecha debe tener el formato AAAA-MM-DD.") from error
-        return self.database.create_session(course, selected_date, overwrite)
+        return self.database.create_session(course, selected_date)
 
     def attendance_status(
         self,

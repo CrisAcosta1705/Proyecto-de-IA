@@ -2713,98 +2713,25 @@ class MainActivity : ComponentActivity() {
             return
         }
         val selection = AttendanceSelection(course, attendanceDate, mode, serverUrl)
-        val localStatus = if (mode == ProcessingMode.SERVER) {
-            LocalAttendanceStatus(null, 0)
-        } else {
-            localStore.attendanceStatus(course, attendanceDate)
-        }
-        if (localStatus.attendanceCount > 0) {
-            confirmAttendanceOverwrite(selection, localStatus.attendanceCount)
-            return
-        }
-        if (mode != ProcessingMode.PHONE && serverUrl != null) {
-            checkServerAttendanceConflict(selection)
-        } else {
-            captureAttendance(selection, overwrite = false)
-        }
+        captureAttendance(selection)
     }
 
-    private fun checkServerAttendanceConflict(selection: AttendanceSelection) {
-        if (!isNetworkBusy.compareAndSet(false, true)) {
-            showStatus(getString(R.string.network_busy))
-            return
-        }
-        setProcessing(true, "Comprobando la lista de asistencia...")
-        networkExecutor.execute {
-            var attendanceCount = 0
-            var failure: Exception? = null
-            try {
-                val serverUrl = selection.serverUrl!!
-                val available = runCatching { isHealthyServer(serverUrl) }.getOrDefault(false)
-                if (!available && selection.mode == ProcessingMode.SERVER) {
-                    throw ConnectException(getString(R.string.server_unreachable))
-                }
-                if (available) {
-                    val query = attendanceQuery(selection.course, selection.attendanceDate)
-                    attendanceCount = getJsonObject(
-                        "$serverUrl/attendance/status?$query"
-                    ).optInt("attendance_count", 0)
-                }
-            } catch (error: Exception) {
-                failure = error
-            } finally {
-                isNetworkBusy.set(false)
-                setProcessing(false)
-            }
-            runOnUiThread {
-                when {
-                    failure != null -> showStatus(networkErrorMessage(failure!!))
-                    attendanceCount > 0 -> {
-                        confirmAttendanceOverwrite(selection, attendanceCount)
-                    }
-                    else -> captureAttendance(selection, overwrite = false)
-                }
-            }
-        }
-    }
-
-    private fun confirmAttendanceOverwrite(
-        selection: AttendanceSelection,
-        attendanceCount: Int
-    ) {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.attendance_overwrite_title)
-            .setMessage(
-                getString(
-                    R.string.attendance_overwrite_message,
-                    selection.course,
-                    selection.attendanceDate,
-                    attendanceCount
-                )
-            )
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.overwrite) { _, _ ->
-                captureAttendance(selection, overwrite = true)
-            }
-            .show()
-    }
-
-    private fun captureAttendance(selection: AttendanceSelection, overwrite: Boolean) {
+    private fun captureAttendance(selection: AttendanceSelection) {
         captureAndRunNetwork { jpeg ->
             when (selection.mode) {
                 ProcessingMode.PHONE -> {
                     showLocalRecognitionResult(
-                        recognizeLocally(selection, jpeg, overwrite)
+                        recognizeLocally(selection, jpeg)
                     )
                 }
                 ProcessingMode.SERVER -> {
                     showRecognitionResult(
-                        recognizeOnServer(selection, jpeg, overwrite)
+                        recognizeOnServer(selection, jpeg)
                     )
                 }
                 ProcessingMode.AUTOMATIC -> {
                     val localResult = runCatching {
-                        recognizeLocally(selection, jpeg, overwrite)
+                        recognizeLocally(selection, jpeg)
                     }
                     if ((localResult.getOrNull()?.recognizedCount ?: 0) > 0) {
                         showLocalRecognitionResult(localResult.getOrThrow())
@@ -2815,7 +2742,7 @@ class MainActivity : ComponentActivity() {
                         selection.serverUrl != null &&
                         runCatching { isHealthyServer(selection.serverUrl) }.getOrDefault(false)
                     ) {
-                        runCatching { recognizeOnServer(selection, jpeg, overwrite) }
+                        runCatching { recognizeOnServer(selection, jpeg) }
                     } else {
                         null
                     }
@@ -3020,8 +2947,7 @@ class MainActivity : ComponentActivity() {
 
     private fun recognizeOnServer(
         selection: AttendanceSelection,
-        jpeg: ByteArray,
-        overwrite: Boolean
+        jpeg: ByteArray
     ): JSONObject {
         val serverUrl = requireNotNull(selection.serverUrl)
         val created = postJson(
@@ -3029,7 +2955,6 @@ class MainActivity : ComponentActivity() {
             JSONObject()
                 .put("course", selection.course)
                 .put("attendance_date", selection.attendanceDate)
-                .put("overwrite", overwrite)
         )
         val sessionId = created.getInt("session_id")
         activeSessionId = sessionId
@@ -3043,15 +2968,13 @@ class MainActivity : ComponentActivity() {
 
     private fun recognizeLocally(
         selection: AttendanceSelection,
-        jpeg: ByteArray,
-        overwrite: Boolean
+        jpeg: ByteArray
     ): LocalRecognitionBatch {
         setProcessing(true, getString(R.string.local_processing))
         val extraction = extractLocalFaces(jpeg)
         val sessionId = localStore.createSession(
             selection.course,
-            selection.attendanceDate,
-            overwrite
+            selection.attendanceDate
         )
         activeLocalSessionId = sessionId
         return localStore.recognize(

@@ -10,7 +10,7 @@ from asistencia_ia.api import create_app
 from asistencia_ia.domain import BoundingBox
 from asistencia_ia.recognition.extractor import ExtractedFace
 from asistencia_ia.services.attendance import AttendanceService, FaceProcessingError
-from asistencia_ia.storage import AttendanceAlreadyExistsError, AttendanceDatabase
+from asistencia_ia.storage import AttendanceDatabase
 
 
 def _image_bytes() -> bytes:
@@ -208,7 +208,7 @@ class AttendanceServiceTest(unittest.TestCase):
         self.assertEqual(self.database.embedding_count("estudiante_001"), 1)
         self.assertIsNotNone(self.database.student_photo("estudiante_001"))
 
-    def test_attendance_by_date_can_be_overwritten_and_grouped_by_sex(self) -> None:
+    def test_attendance_by_date_accumulates_photos_and_groups_by_sex(self) -> None:
         self.extractor.faces = [_face([1.0, 0.0])]
         self.service.register_student(
             "estudiante_m",
@@ -227,44 +227,33 @@ class AttendanceServiceTest(unittest.TestCase):
             "Inteligencia artificial",
             "2026-11-01",
         )
-        self.extractor.faces = [_face([1.0, 0.0]), _face([0.0, 1.0])]
+        self.extractor.faces = [_face([1.0, 0.0])]
 
-        result = self.service.recognize(session_id, _image_bytes())
+        first = self.service.recognize(session_id, _image_bytes())
+        continued_id = self.service.create_session(
+            "Inteligencia artificial",
+            "2026-11-01",
+        )
+        self.extractor.faces = [_face([1.0, 0.0]), _face([0.0, 1.0])]
+        second = self.service.recognize(continued_id, _image_bytes())
         report = self.service.attendance_report(
             "Inteligencia artificial",
             "2026-11-01",
         )
         summaries = self.database.attendance_summaries()
 
-        self.assertEqual(result["attendance_count"], 2)
+        self.assertEqual(continued_id, session_id)
+        self.assertEqual(first["attendance_count"], 1)
+        self.assertEqual(second["attendance_count"], 2)
+        self.assertFalse(second["faces"][0]["attendance_recorded"])
+        self.assertTrue(second["faces"][1]["attendance_recorded"])
         self.assertEqual(report["statistics"]["masculino"], 1)
         self.assertEqual(report["statistics"]["femenino"], 1)
         self.assertEqual(report["statistics"]["no_especificado"], 0)
         self.assertEqual(summaries[0]["total"], 2)
         self.assertEqual(summaries[0]["male"], 1)
         self.assertEqual(summaries[0]["female"], 1)
-        with self.assertRaises(AttendanceAlreadyExistsError):
-            self.service.create_session(
-                "Inteligencia artificial",
-                "2026-11-01",
-            )
-
-        overwritten_id = self.service.create_session(
-            "Inteligencia artificial",
-            "2026-11-01",
-            overwrite=True,
-        )
-
-        self.assertEqual(overwritten_id, session_id)
-        self.assertEqual(
-            self.service.attendance_report(
-                "Inteligencia artificial",
-                "2026-11-01",
-            )["count"],
-            0,
-        )
-
-    def test_api_reports_conflict_and_attendance_statistics(self) -> None:
+    def test_api_reuses_session_and_preserves_attendance_statistics(self) -> None:
         self.extractor.faces = [_face([1.0, 0.0])]
         self.service.register_student(
             "estudiante_001",
@@ -289,7 +278,11 @@ class AttendanceServiceTest(unittest.TestCase):
                 f"/sessions/{session_id}/recognize",
                 files={"image": ("aula.jpg", _image_bytes(), "image/jpeg")},
             )
-            conflict = client.post("/sessions", json=payload)
+            continued = client.post("/sessions", json=payload)
+            recognized_again = client.post(
+                f"/sessions/{session_id}/recognize",
+                files={"image": ("aula-2.jpg", _image_bytes(), "image/jpeg")},
+            )
             report = client.get(
                 "/attendance/report",
                 params={
@@ -301,7 +294,11 @@ class AttendanceServiceTest(unittest.TestCase):
 
         self.assertEqual(created.status_code, 200)
         self.assertEqual(recognized.status_code, 200)
-        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(continued.status_code, 200)
+        self.assertEqual(continued.json()["session_id"], session_id)
+        self.assertEqual(recognized_again.status_code, 200)
+        self.assertEqual(recognized_again.json()["attendance_count"], 1)
+        self.assertFalse(recognized_again.json()["faces"][0]["attendance_recorded"])
         self.assertEqual(report.status_code, 200)
         self.assertEqual(report.json()["count"], 1)
         self.assertEqual(report.json()["statistics"]["masculino"], 1)

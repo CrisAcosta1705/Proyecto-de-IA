@@ -13,10 +13,6 @@ const val SEX_MALE = "MASCULINO"
 const val SEX_FEMALE = "FEMENINO"
 const val SEX_UNSPECIFIED = "NO_ESPECIFICADO"
 
-class AttendanceConflictException : IllegalStateException(
-    "Ya existe una lista para esa fecha y materia."
-)
-
 data class LocalAttendanceStatus(
     val sessionId: Long?,
     val attendanceCount: Int
@@ -581,8 +577,7 @@ class LocalAttendanceStore(context: Context) :
 
     fun createSession(
         course: String,
-        attendanceDate: String = LocalDate.now().toString(),
-        overwrite: Boolean = false
+        attendanceDate: String = LocalDate.now().toString()
     ): Long {
         val cleanCourse = course.trim()
         val db = writableDatabase
@@ -591,20 +586,9 @@ class LocalAttendanceStore(context: Context) :
             val status = attendanceStatus(cleanCourse, attendanceDate)
             val sessionId = status.sessionId
             if (sessionId != null) {
-                if (status.attendanceCount > 0 && !overwrite) {
-                    throw AttendanceConflictException()
-                }
-                if (overwrite) {
-                    db.delete(
-                        "attendance",
-                        "session_id = ?",
-                        arrayOf(sessionId.toString())
-                    )
-                }
                 db.update(
                     "attendance_sessions",
                     ContentValues().apply {
-                        put("started_at", System.currentTimeMillis())
                         putNull("finished_at")
                     },
                     "id = ?",

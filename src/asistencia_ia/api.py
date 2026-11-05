@@ -11,7 +11,7 @@ import uvicorn
 from asistencia_ia.discovery import DISCOVERY_PORT, DiscoveryResponder
 from asistencia_ia.recognition import InsightFaceExtractor
 from asistencia_ia.services.attendance import AttendanceService, FaceProcessingError
-from asistencia_ia.storage import AttendanceAlreadyExistsError, AttendanceDatabase
+from asistencia_ia.storage import AttendanceDatabase
 
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -20,7 +20,6 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 class SessionRequest(BaseModel):
     course: str = Field(min_length=2, max_length=100)
     attendance_date: date = Field(default_factory=date.today)
-    overwrite: bool = False
 
 
 class StudentSexRequest(BaseModel):
@@ -186,16 +185,12 @@ def create_app(
             session_id = service.create_session(
                 request.course,
                 selected_date,
-                request.overwrite,
             )
             return {
                 "session_id": session_id,
                 "course": request.course.strip(),
                 "attendance_date": selected_date,
-                "overwritten": request.overwrite,
             }
-        except AttendanceAlreadyExistsError as error:
-            raise HTTPException(409, str(error)) from error
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
 

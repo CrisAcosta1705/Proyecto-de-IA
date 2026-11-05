@@ -134,7 +134,8 @@ privadas. El valor `10.0.2.2` se utiliza solamente desde el emulador Android.
    La app analiza el video, exige varios frames estables y guarda automaticamente
    una referencia clara por posicion.
 5. Abre `Asistencia`, selecciona materia y fecha, y pulsa `Reconocer asistencia`.
-6. Si ya existe una lista para esa fecha y materia, confirma si deseas reemplazarla.
+6. Puedes tomar varias fotografias para la misma materia y fecha. Cada captura
+   agrega estudiantes nuevos y conserva una sola asistencia por carnet.
 7. Abre `Historial` para consultar todas las listas y sus estadisticas por sexo.
 8. Abre `Estudiantes` para ver la tabla de rostros, editar perfiles o eliminar
    datos biometricos sin borrar asistencias historicas.

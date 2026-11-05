@@ -14,10 +14,6 @@ from asistencia_ia.recognition.matcher import normalize_embedding
 Embedding = NDArray[np.float32]
 
 
-class AttendanceAlreadyExistsError(ValueError):
-    """La fecha y la materia ya tienen una lista con estudiantes."""
-
-
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -387,7 +383,6 @@ class AttendanceDatabase:
         self,
         course: str,
         attendance_date: str | None = None,
-        overwrite: bool = False,
     ) -> int:
         selected_date = attendance_date or date.today().isoformat()
         with self._connection() as connection:
@@ -405,22 +400,13 @@ class AttendanceDatabase:
             ).fetchone()
             if existing is not None:
                 session_id = int(existing["id"])
-                if int(existing["attendance_count"]) > 0 and not overwrite:
-                    raise AttendanceAlreadyExistsError(
-                        "Ya existe una lista para esa fecha y materia."
-                    )
-                if overwrite:
-                    connection.execute(
-                        "DELETE FROM attendance_records WHERE session_id = ?",
-                        (session_id,),
-                    )
                 connection.execute(
                     """
                     UPDATE attendance_sessions
-                    SET started_at = ?, ended_at = NULL
+                    SET ended_at = NULL
                     WHERE id = ?
                     """,
-                    (_utc_now(), session_id),
+                    (session_id,),
                 )
                 return session_id
 
