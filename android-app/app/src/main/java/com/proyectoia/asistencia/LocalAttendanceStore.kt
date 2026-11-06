@@ -527,7 +527,9 @@ class LocalAttendanceStore(context: Context) :
         name: String,
         existingStudentId: String?
     ): StudentIdentityConflict? {
+        val canonicalId = canonicalStudentIdentity(studentId)
         val excludedId = existingStudentId
+            ?.takeIf { canonicalStudentIdentity(it) == canonicalId }
             ?.let(::canonicalStudentIdentity)
             ?.takeIf { it.isNotBlank() }
         val rows = db.rawQuery(
@@ -542,7 +544,6 @@ class LocalAttendanceStore(context: Context) :
                 }
             }
         }
-        val canonicalId = canonicalStudentIdentity(studentId)
         if (rows.any { (storedId, _) ->
                 canonicalStudentIdentity(storedId) == canonicalId
             }

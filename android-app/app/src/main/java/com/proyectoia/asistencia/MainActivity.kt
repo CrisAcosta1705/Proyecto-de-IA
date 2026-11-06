@@ -1313,13 +1313,14 @@ class MainActivity : ComponentActivity() {
         name: String,
         existingStudentId: String?
     ): StudentIdentityConflict? {
+        val canonicalId = canonicalStudentIdentity(studentId)
         val excludedId = existingStudentId
+            ?.takeIf { canonicalStudentIdentity(it) == canonicalId }
             ?.let(::canonicalStudentIdentity)
             ?.takeIf { it.isNotBlank() }
         val available = profiles.filterNot {
             canonicalStudentIdentity(it.studentId) == excludedId
         }
-        val canonicalId = canonicalStudentIdentity(studentId)
         if (available.any { canonicalStudentIdentity(it.studentId) == canonicalId }) {
             return StudentIdentityConflict.CARNET
         }
@@ -1358,13 +1359,16 @@ class MainActivity : ComponentActivity() {
         }
         val mode = selectedProcessingMode()
         val serverUrl = serverUrlFor(mode) ?: if (mode == ProcessingMode.SERVER) return else null
+        val existingStudentId = pendingReferenceUpdateStudentId?.takeIf {
+            canonicalStudentIdentity(it) == canonicalStudentIdentity(studentId)
+        }
         guidedContext = GuidedRegistrationContext(
             studentId,
             name,
             sex,
             mode,
             serverUrl,
-            pendingReferenceUpdateStudentId
+            existingStudentId
         )
         enterCameraFullscreen(
             registrationCameraContainer,
