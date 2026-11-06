@@ -13,7 +13,7 @@
     <string name="class_label">Clase</string>
     <string name="attendance_date_label">Fecha de asistencia</string>
     <string name="attendance_date_hint">Seleccionar fecha</string>
-    <string name="student_id_hint">Identificador, por ejemplo estudiante_001</string>
+    <string name="student_id_hint">Carnet de estudiante</string>
     <string name="student_name_hint">Nombre del estudiante</string>
     <string name="student_sex_label">Sexo registrado</string>
     <string-array name="student_sexes">
@@ -107,7 +107,9 @@
     <string name="logout">Cerrar sesión</string>
     <string name="logout_title">Cerrar sesión</string>
     <string name="logout_message">Se cerrará el acceso a la aplicación. Los estudiantes y las asistencias se conservarán.</string>
-    <string name="invalid_registration">Ingresa identificador, nombre y sexo antes de registrar.</string>
+    <string name="invalid_registration">Ingresa el carnet de estudiante, nombre y sexo antes de registrar.</string>
+    <string name="duplicate_student_carnet">Ya existe un estudiante con ese carnet.</string>
+    <string name="duplicate_student_name">Ya existe un estudiante con ese nombre.</string>
     <string name="registration_complete">Captura registrada para %1$s.</string>
     <string name="local_registration_complete">Captura registrada en este telefono para %1$s.</string>
     <string name="hybrid_registration_complete">Captura registrada en el telefono y en el servidor para %1$s.</string>

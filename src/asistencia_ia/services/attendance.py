@@ -75,13 +75,14 @@ class AttendanceService:
         replace_embeddings: bool = True,
         photo_mime_type: str = "image/jpeg",
         sex: str = "NO_ESPECIFICADO",
+        allow_existing_student: bool = False,
     ) -> int:
         student_id = student_id.strip()
         name = name.strip()
         sex = sex.strip().upper()
         if not STUDENT_ID_PATTERN.fullmatch(student_id):
             raise FaceProcessingError(
-                "El identificador debe usar entre 2 y 64 letras, numeros, _ o -."
+                "El carnet debe usar entre 2 y 64 letras, numeros, _ o -."
             )
         if not 2 <= len(name) <= 100:
             raise FaceProcessingError("El nombre debe tener entre 2 y 100 caracteres.")
@@ -89,6 +90,15 @@ class AttendanceService:
             raise FaceProcessingError("El sexo debe ser MASCULINO o FEMENINO.")
         if not 1 <= len(image_contents) <= 20:
             raise FaceProcessingError("Se requieren entre 1 y 20 fotos de registro.")
+        conflict = self.database.student_identity_conflict(
+            student_id,
+            name,
+            existing_student_id=student_id if allow_existing_student else None,
+        )
+        if conflict == "carnet":
+            raise FaceProcessingError("Ya existe un estudiante con ese carnet.")
+        if conflict == "name":
+            raise FaceProcessingError("Ya existe un estudiante con ese nombre.")
         embeddings = []
         valid_images = []
         rejected_images = 0

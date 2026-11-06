@@ -201,7 +201,7 @@ Para borrar un registro facial, escribe el carnet, pulsa
 `Eliminar reconocimiento` y confirma el dialogo. La fotografia y los embeddings
 se eliminan; el nombre, carnet y las asistencias historicas se conservan.
 
-El identificador admite letras, numeros, guion y guion bajo, por ejemplo
+El carnet de estudiante admite letras, numeros, guion y guion bajo, por ejemplo
 `estudiante_001`.
 
 ## Ejecutar Android

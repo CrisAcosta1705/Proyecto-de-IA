@@ -14,11 +14,28 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.text.Normalizer
 import java.time.LocalDate
+import java.util.Locale
 
 const val SEX_MALE = "MASCULINO"
 const val SEX_FEMALE = "FEMENINO"
 const val SEX_UNSPECIFIED = "NO_ESPECIFICADO"
+
+enum class StudentIdentityConflict {
+    CARNET,
+    NAME
+}
+
+private val identityMarksRegex = Regex("\\p{M}+")
+private val identityWhitespaceRegex = Regex("\\s+")
+
+internal fun canonicalStudentIdentity(value: String): String {
+    return Normalizer.normalize(value.trim(), Normalizer.Form.NFD)
+        .replace(identityMarksRegex, "")
+        .lowercase(Locale.ROOT)
+        .replace(identityWhitespaceRegex, " ")
+}
 
 data class LocalAttendanceStatus(
     val sessionId: Long?,
@@ -208,7 +225,8 @@ class LocalAttendanceStore(context: Context) :
         name: String,
         sex: String,
         embedding: FloatArray,
-        photoJpeg: ByteArray
+        photoJpeg: ByteArray,
+        existingStudentId: String? = null
     ) {
         val cleanId = studentId.trim()
         val cleanName = name.trim()
@@ -218,6 +236,7 @@ class LocalAttendanceStore(context: Context) :
         val db = writableDatabase
         db.beginTransaction()
         try {
+            requireNoIdentityConflict(db, cleanId, cleanName, existingStudentId)
             db.delete("deleted_students", "student_id = ?", arrayOf(cleanId))
             saveStudentEmbedding(db, cleanId, cleanName, sex, embedding, photoJpeg)
             db.setTransactionSuccessful()
@@ -230,7 +249,8 @@ class LocalAttendanceStore(context: Context) :
         studentId: String,
         name: String,
         sex: String,
-        samples: List<Pair<FloatArray, ByteArray>>
+        samples: List<Pair<FloatArray, ByteArray>>,
+        existingStudentId: String? = null
     ) {
         val cleanId = studentId.trim()
         val cleanName = name.trim()
@@ -241,6 +261,7 @@ class LocalAttendanceStore(context: Context) :
         val db = writableDatabase
         db.beginTransaction()
         try {
+            requireNoIdentityConflict(db, cleanId, cleanName, existingStudentId)
             db.delete("deleted_students", "student_id = ?", arrayOf(cleanId))
             db.delete("server_imports", "student_id = ?", arrayOf(cleanId))
             db.delete("face_embeddings", "student_id = ?", arrayOf(cleanId))
@@ -421,6 +442,19 @@ class LocalAttendanceStore(context: Context) :
         }
     }
 
+    fun findStudentIdentityConflict(
+        studentId: String,
+        name: String,
+        existingStudentId: String? = null
+    ): StudentIdentityConflict? {
+        return findStudentIdentityConflict(
+            readableDatabase,
+            studentId.trim(),
+            name.trim(),
+            existingStudentId
+        )
+    }
+
     fun facePhotosForServerUpload(studentId: String): List<ByteArray> {
         val db = readableDatabase
         val embeddingIds = db.query(
@@ -451,6 +485,12 @@ class LocalAttendanceStore(context: Context) :
         val cleanId = studentId.trim()
         val cleanName = name.trim()
         require(cleanName.isNotBlank()) { "El nombre es obligatorio." }
+        requireNoIdentityConflict(
+            writableDatabase,
+            cleanId,
+            cleanName,
+            existingStudentId = cleanId
+        )
         val updated = writableDatabase.update(
             "students",
             ContentValues().apply {
@@ -462,6 +502,61 @@ class LocalAttendanceStore(context: Context) :
         )
         if (updated == 0) return null
         return listStudents().firstOrNull { it.studentId == cleanId }
+    }
+
+    private fun requireNoIdentityConflict(
+        db: SQLiteDatabase,
+        studentId: String,
+        name: String,
+        existingStudentId: String?
+    ) {
+        when (findStudentIdentityConflict(db, studentId, name, existingStudentId)) {
+            StudentIdentityConflict.CARNET -> {
+                throw IllegalArgumentException("Ya existe un estudiante con ese carnet.")
+            }
+            StudentIdentityConflict.NAME -> {
+                throw IllegalArgumentException("Ya existe un estudiante con ese nombre.")
+            }
+            null -> Unit
+        }
+    }
+
+    private fun findStudentIdentityConflict(
+        db: SQLiteDatabase,
+        studentId: String,
+        name: String,
+        existingStudentId: String?
+    ): StudentIdentityConflict? {
+        val excludedId = existingStudentId
+            ?.let(::canonicalStudentIdentity)
+            ?.takeIf { it.isNotBlank() }
+        val rows = db.rawQuery(
+            "SELECT student_id, name FROM students",
+            emptyArray()
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val storedId = cursor.getString(0)
+                    if (canonicalStudentIdentity(storedId) == excludedId) continue
+                    add(storedId to cursor.getString(1))
+                }
+            }
+        }
+        val canonicalId = canonicalStudentIdentity(studentId)
+        if (rows.any { (storedId, _) ->
+                canonicalStudentIdentity(storedId) == canonicalId
+            }
+        ) {
+            return StudentIdentityConflict.CARNET
+        }
+        val canonicalName = canonicalStudentIdentity(name)
+        if (rows.any { (_, storedName) ->
+                canonicalStudentIdentity(storedName) == canonicalName
+            }
+        ) {
+            return StudentIdentityConflict.NAME
+        }
+        return null
     }
 
     fun updateStudentSex(studentId: String, sex: String): String? {

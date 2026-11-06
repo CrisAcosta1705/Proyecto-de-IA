@@ -193,6 +193,7 @@ class MainActivity : ComponentActivity() {
     private val guidedSamples = mutableListOf<GuidedRegistrationSample>()
     private var guidedContext: GuidedRegistrationContext? = null
     private var pendingGalleryUpdateContext: GuidedRegistrationContext? = null
+    private var pendingReferenceUpdateStudentId: String? = null
     private var currentStudentProfiles: List<StudentProfileData> = emptyList()
     private var authMode = AuthMode.LOGIN
     private var appServicesStarted = false
@@ -352,7 +353,8 @@ class MainActivity : ComponentActivity() {
         val name: String,
         val sex: String,
         val mode: ProcessingMode,
-        val serverUrl: String?
+        val serverUrl: String?,
+        val existingStudentId: String? = null
     )
 
     private data class AttendanceReportData(
@@ -572,6 +574,7 @@ class MainActivity : ComponentActivity() {
         }
 
         findViewById<Button>(R.id.registerButton).setOnClickListener {
+            pendingReferenceUpdateStudentId = null
             showGuidedRegistrationConditions()
         }
         cancelRegistrationButton.setOnClickListener { cancelGuidedRegistration() }
@@ -1246,14 +1249,102 @@ class MainActivity : ComponentActivity() {
             showStatus(getString(R.string.invalid_registration))
             return
         }
-        AlertDialog.Builder(this)
-            .setTitle(R.string.registration_conditions_title)
-            .setMessage(R.string.registration_conditions_message)
-            .setNegativeButton(android.R.string.cancel, null)
-            .setPositiveButton(R.string.registration_conditions_start) { _, _ ->
-                startGuidedRegistration()
+        val mode = selectedProcessingMode()
+        val serverUrl = serverUrlFor(mode) ?: if (mode == ProcessingMode.SERVER) return else null
+        val existingStudentId = pendingReferenceUpdateStudentId
+        runNetworkRequest {
+            val conflict = findRegistrationIdentityConflict(
+                studentId,
+                name,
+                mode,
+                serverUrl,
+                existingStudentId
+            )
+            runOnUiThread {
+                if (conflict != null) {
+                    showRegistrationIdentityConflict(conflict)
+                    return@runOnUiThread
+                }
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.registration_conditions_title)
+                    .setMessage(R.string.registration_conditions_message)
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .setPositiveButton(R.string.registration_conditions_start) { _, _ ->
+                        startGuidedRegistration()
+                    }
+                    .show()
             }
-            .show()
+        }
+    }
+
+    private fun findRegistrationIdentityConflict(
+        studentId: String,
+        name: String,
+        mode: ProcessingMode,
+        serverUrl: String?,
+        existingStudentId: String?
+    ): StudentIdentityConflict? {
+        if (mode != ProcessingMode.SERVER) {
+            localStore.findStudentIdentityConflict(
+                studentId,
+                name,
+                existingStudentId
+            )?.let { return it }
+        }
+        if (mode == ProcessingMode.PHONE || serverUrl == null) return null
+        val serverAvailable = isHealthyServer(serverUrl)
+        if (!serverAvailable) {
+            if (mode == ProcessingMode.SERVER) {
+                throw ConnectException(getString(R.string.server_unreachable))
+            }
+            return null
+        }
+        return findStudentIdentityConflict(
+            loadServerStudentIdentities(serverUrl),
+            studentId,
+            name,
+            existingStudentId
+        )
+    }
+
+    private fun findStudentIdentityConflict(
+        profiles: List<StudentProfileData>,
+        studentId: String,
+        name: String,
+        existingStudentId: String?
+    ): StudentIdentityConflict? {
+        val excludedId = existingStudentId
+            ?.let(::canonicalStudentIdentity)
+            ?.takeIf { it.isNotBlank() }
+        val available = profiles.filterNot {
+            canonicalStudentIdentity(it.studentId) == excludedId
+        }
+        val canonicalId = canonicalStudentIdentity(studentId)
+        if (available.any { canonicalStudentIdentity(it.studentId) == canonicalId }) {
+            return StudentIdentityConflict.CARNET
+        }
+        val canonicalName = canonicalStudentIdentity(name)
+        if (available.any { canonicalStudentIdentity(it.name) == canonicalName }) {
+            return StudentIdentityConflict.NAME
+        }
+        return null
+    }
+
+    private fun showRegistrationIdentityConflict(conflict: StudentIdentityConflict) {
+        when (conflict) {
+            StudentIdentityConflict.CARNET -> {
+                val message = getString(R.string.duplicate_student_carnet)
+                studentIdEditText.error = message
+                studentIdEditText.requestFocus()
+                showStatus(message)
+            }
+            StudentIdentityConflict.NAME -> {
+                val message = getString(R.string.duplicate_student_name)
+                studentNameEditText.error = message
+                studentNameEditText.requestFocus()
+                showStatus(message)
+            }
+        }
     }
 
     private fun startGuidedRegistration() {
@@ -1267,7 +1358,14 @@ class MainActivity : ComponentActivity() {
         }
         val mode = selectedProcessingMode()
         val serverUrl = serverUrlFor(mode) ?: if (mode == ProcessingMode.SERVER) return else null
-        guidedContext = GuidedRegistrationContext(studentId, name, sex, mode, serverUrl)
+        guidedContext = GuidedRegistrationContext(
+            studentId,
+            name,
+            sex,
+            mode,
+            serverUrl,
+            pendingReferenceUpdateStudentId
+        )
         enterCameraFullscreen(
             registrationCameraContainer,
             FullscreenCameraMode.REGISTRATION
@@ -1302,6 +1400,7 @@ class MainActivity : ComponentActivity() {
         guidedStableFrames = 0
         guidedSamples.clear()
         guidedContext = null
+        pendingReferenceUpdateStudentId = null
         isGuidedCaptureRunning.set(false)
         setGuidedProfileFieldsEnabled(true)
         cancelRegistrationButton.visibility = View.GONE
@@ -1967,7 +2066,8 @@ class MainActivity : ComponentActivity() {
                     context.studentId,
                     context.name,
                     context.sex,
-                    guidedSamples.map { it.embedding to it.jpeg }
+                    guidedSamples.map { it.embedding to it.jpeg },
+                    existingStudentId = context.existingStudentId
                 )
                 localStored = true
             } catch (error: Exception) {
@@ -1984,7 +2084,8 @@ class MainActivity : ComponentActivity() {
                         context.studentId,
                         context.name,
                         context.sex,
-                        guidedSamples.map { it.jpeg }
+                        guidedSamples.map { it.jpeg },
+                        allowExistingStudent = context.existingStudentId != null
                     )
                     serverStored = true
                 } catch (error: Exception) {
@@ -2041,6 +2142,7 @@ class MainActivity : ComponentActivity() {
                 studentNameEditText.text.clear()
                 studentSexSpinner.setSelection(0)
             }
+            pendingReferenceUpdateStudentId = null
         }
     }
 
@@ -2251,6 +2353,27 @@ class MainActivity : ComponentActivity() {
         }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
     }
 
+    private fun loadServerStudentIdentities(serverUrl: String): List<StudentProfileData> {
+        val response = getJsonArray("$serverUrl/students")
+        return buildList {
+            for (index in 0 until response.length()) {
+                val item = response.optJSONObject(index) ?: continue
+                val studentId = item.optString("student_id").trim()
+                val name = item.optString("name").trim()
+                if (studentId.isBlank() || name.isBlank()) continue
+                add(
+                    StudentProfileData(
+                        studentId = studentId,
+                        name = name,
+                        sex = item.optString("sex", SEX_UNSPECIFIED).trim(),
+                        embeddingCount = item.optInt("embedding_count", 0),
+                        photoJpeg = null
+                    )
+                )
+            }
+        }
+    }
+
     private fun renderStudentTable(profiles: List<StudentProfileData>) {
         studentsCountText.text = getString(
             R.string.registered_students_table_count,
@@ -2416,6 +2539,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startFaceReferenceUpdate(studentId: String, name: String, sex: String) {
+        pendingReferenceUpdateStudentId = studentId
         studentIdEditText.setText(studentId)
         studentNameEditText.setText(name)
         studentSexSpinner.setSelection(if (sex == SEX_FEMALE) 2 else 1)
@@ -2459,7 +2583,8 @@ class MainActivity : ComponentActivity() {
             name,
             sex,
             mode,
-            serverUrl
+            serverUrl,
+            existingStudentId = studentId
         )
         pickFaceReferencePhotos.launch(
             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -2542,7 +2667,8 @@ class MainActivity : ComponentActivity() {
                             context.studentId,
                             context.name,
                             context.sex,
-                            samples.map { it.embedding to it.jpeg }
+                            samples.map { it.embedding to it.jpeg },
+                            existingStudentId = context.existingStudentId
                         )
                         localStored = true
                     } catch (error: Exception) {
@@ -2559,7 +2685,8 @@ class MainActivity : ComponentActivity() {
                                 context.studentId,
                                 context.name,
                                 context.sex,
-                                samples.map { it.jpeg }
+                                samples.map { it.jpeg },
+                                allowExistingStudent = true
                             )
                             serverStored = true
                         } catch (error: Exception) {
@@ -2929,7 +3056,8 @@ class MainActivity : ComponentActivity() {
                         student.name,
                         student.sex,
                         photos,
-                        replace = false
+                        replace = false,
+                        allowExistingStudent = true
                     )
                     uploaded++
                 } catch (error: Exception) {
@@ -3392,7 +3520,15 @@ class MainActivity : ComponentActivity() {
         sex: String,
         jpeg: ByteArray
     ) {
-        registerOnServer(serverUrl, studentId, name, sex, listOf(jpeg), replace = false)
+        registerOnServer(
+            serverUrl,
+            studentId,
+            name,
+            sex,
+            listOf(jpeg),
+            replace = false,
+            allowExistingStudent = false
+        )
     }
 
     private fun registerOnServer(
@@ -3401,7 +3537,8 @@ class MainActivity : ComponentActivity() {
         name: String,
         sex: String,
         jpegs: List<ByteArray>,
-        replace: Boolean = true
+        replace: Boolean = true,
+        allowExistingStudent: Boolean = false
     ) {
         postMultipartFiles(
             "$serverUrl/students/register",
@@ -3409,7 +3546,8 @@ class MainActivity : ComponentActivity() {
                 "student_id" to studentId,
                 "name" to name,
                 "sex" to sex,
-                "replace_embeddings" to replace.toString()
+                "replace_embeddings" to replace.toString(),
+                "allow_existing_student" to allowExistingStudent.toString()
             ),
             "images",
             jpegs

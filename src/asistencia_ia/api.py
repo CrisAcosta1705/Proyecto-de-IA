@@ -189,6 +189,15 @@ def create_app(
             raise HTTPException(422, "El nombre debe contener al menos 2 caracteres.")
         if sex not in {"MASCULINO", "FEMENINO"}:
             raise HTTPException(422, "El sexo debe ser MASCULINO o FEMENINO.")
+        conflict = database.student_identity_conflict(
+            clean_id,
+            name,
+            existing_student_id=clean_id,
+        )
+        if conflict == "name":
+            raise HTTPException(422, "Ya existe un estudiante con ese nombre.")
+        if conflict == "carnet":
+            raise HTTPException(422, "Ya existe un estudiante con ese carnet.")
         profile = database.update_student_profile(clean_id, name, sex)
         if profile is None:
             raise HTTPException(404, "El estudiante no existe.")
@@ -223,6 +232,7 @@ def create_app(
         name: str = Form(...),
         sex: str = Form("NO_ESPECIFICADO"),
         replace_embeddings: bool = Form(True),
+        allow_existing_student: bool = Form(False),
         images: list[UploadFile] = File(...),
     ) -> dict[str, object]:
         try:
@@ -236,6 +246,7 @@ def create_app(
                 replace_embeddings,
                 mime_type,
                 sex,
+                allow_existing_student,
             )
             return {
                 "student_id": student_id.strip(),

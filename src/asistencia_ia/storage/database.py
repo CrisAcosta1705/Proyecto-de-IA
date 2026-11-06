@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 import hashlib
 from pathlib import Path
 from typing import Iterator
+import unicodedata
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -16,6 +17,16 @@ Embedding = NDArray[np.float32]
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _canonical_student_identity(value: str) -> str:
+    decomposed = unicodedata.normalize("NFD", value.strip())
+    without_marks = "".join(
+        character
+        for character in decomposed
+        if not unicodedata.combining(character)
+    )
+    return " ".join(without_marks.casefold().split())
 
 
 class AttendanceDatabase:
@@ -249,6 +260,40 @@ class AttendanceDatabase:
                 """
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def student_identity_conflict(
+        self,
+        student_id: str,
+        name: str,
+        existing_student_id: str | None = None,
+    ) -> str | None:
+        excluded_id = (
+            _canonical_student_identity(existing_student_id)
+            if existing_student_id
+            else None
+        )
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT student_id, name FROM students"
+            ).fetchall()
+        available = [
+            row
+            for row in rows
+            if _canonical_student_identity(str(row["student_id"])) != excluded_id
+        ]
+        canonical_id = _canonical_student_identity(student_id)
+        if any(
+            _canonical_student_identity(str(row["student_id"])) == canonical_id
+            for row in available
+        ):
+            return "carnet"
+        canonical_name = _canonical_student_identity(name)
+        if any(
+            _canonical_student_identity(str(row["name"])) == canonical_name
+            for row in available
+        ):
+            return "name"
+        return None
 
     def student_photo(self, student_id: str) -> tuple[bytes, str] | None:
         with self._connection() as connection:

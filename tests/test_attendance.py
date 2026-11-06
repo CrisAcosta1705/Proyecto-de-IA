@@ -177,10 +177,60 @@ class AttendanceServiceTest(unittest.TestCase):
             "Estudiante Uno",
             [_image_bytes()],
             replace_embeddings=False,
+            allow_existing_student=True,
         )
 
         self.assertEqual(added, 0)
         self.assertEqual(self.database.embedding_count("estudiante_001"), 1)
+
+    def test_registration_rejects_duplicate_carnet(self) -> None:
+        self.extractor.faces = [_face([1.0, 0.0])]
+        self.service.register_student(
+            "2023-001U",
+            "Estudiante Uno",
+            [_image_bytes()],
+        )
+
+        with self.assertRaisesRegex(FaceProcessingError, "carnet"):
+            self.service.register_student(
+                "2023-001u",
+                "Estudiante Diferente",
+                [_image_bytes()],
+            )
+
+    def test_registration_rejects_duplicate_normalized_name(self) -> None:
+        self.extractor.faces = [_face([1.0, 0.0])]
+        self.service.register_student(
+            "2023-001U",
+            "Jose Perez",
+            [_image_bytes()],
+        )
+
+        with self.assertRaisesRegex(FaceProcessingError, "nombre"):
+            self.service.register_student(
+                "2023-002U",
+                "  Jose   Perez  ",
+                [_image_bytes()],
+            )
+
+    def test_reference_update_allows_the_same_student(self) -> None:
+        self.extractor.faces = [_face([1.0, 0.0])]
+        self.service.register_student(
+            "2023-001U",
+            "Estudiante Uno",
+            [_image_bytes()],
+        )
+        self.extractor.faces = [_face([0.9, 0.1])]
+
+        added = self.service.register_student(
+            "2023-001U",
+            "Estudiante Uno",
+            [_image_bytes()],
+            allow_existing_student=True,
+        )
+
+        self.assertEqual(added, 1)
+        self.assertEqual(self.database.embedding_count("2023-001U"), 1)
 
     def test_clear_recognition_preserves_student_and_removes_biometrics(self) -> None:
         self.extractor.faces = [_face([1.0, 0.0])]
@@ -321,6 +371,76 @@ class AttendanceServiceTest(unittest.TestCase):
         self.assertEqual(students.json()[0]["embedding_count"], 1)
         self.assertEqual(self.database.embedding_count("estudiante_001"), 1)
         self.assertIsNotNone(self.database.student_photo("estudiante_001"))
+
+    def test_api_registration_rejects_duplicates_and_allows_reference_update(self) -> None:
+        self.extractor.faces = [_face([1.0, 0.0])]
+        self.service.register_student(
+            "2023-001U",
+            "Estudiante Uno",
+            [_image_bytes()],
+            sex="MASCULINO",
+        )
+        app = create_app(
+            database_path=self.database.path,
+            extractor=self.extractor,
+            similarity_threshold=0.8,
+        )
+        files = [("images", ("rostro.jpg", _image_bytes(), "image/jpeg"))]
+
+        with TestClient(app) as client:
+            duplicate = client.post(
+                "/students/register",
+                data={
+                    "student_id": "2023-001U",
+                    "name": "Estudiante Uno",
+                    "sex": "MASCULINO",
+                },
+                files=files,
+            )
+            updated = client.post(
+                "/students/register",
+                data={
+                    "student_id": "2023-001U",
+                    "name": "Estudiante Uno",
+                    "sex": "MASCULINO",
+                    "allow_existing_student": "true",
+                },
+                files=files,
+            )
+
+        self.assertEqual(duplicate.status_code, 422)
+        self.assertIn("carnet", duplicate.json()["detail"])
+        self.assertEqual(updated.status_code, 200)
+
+    def test_api_profile_edit_rejects_another_students_name(self) -> None:
+        self.extractor.faces = [_face([1.0, 0.0])]
+        self.service.register_student(
+            "2023-001U",
+            "Estudiante Uno",
+            [_image_bytes()],
+            sex="MASCULINO",
+        )
+        self.extractor.faces = [_face([0.0, 1.0])]
+        self.service.register_student(
+            "2023-002U",
+            "Estudiante Dos",
+            [_image_bytes()],
+            sex="FEMENINO",
+        )
+        app = create_app(
+            database_path=self.database.path,
+            extractor=self.extractor,
+            similarity_threshold=0.8,
+        )
+
+        with TestClient(app) as client:
+            response = client.patch(
+                "/students/2023-002U",
+                json={"name": "Estudiante Uno", "sex": "FEMENINO"},
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("nombre", response.json()["detail"])
 
     def test_attendance_by_date_accumulates_photos_and_groups_by_sex(self) -> None:
         self.extractor.faces = [_face([1.0, 0.0])]
