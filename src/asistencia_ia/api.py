@@ -63,12 +63,20 @@ def create_app(
     )
     database = AttendanceDatabase(db_path)
     database.initialize()
-    detection_size = int(os.environ.get("INSIGHTFACE_DETECTION_SIZE", "1024"))
+    detection_size = int(os.environ.get("INSIGHTFACE_DETECTION_SIZE", "1280"))
     if not 320 <= detection_size <= 2048:
         raise ValueError("INSIGHTFACE_DETECTION_SIZE debe estar entre 320 y 2048.")
+    detection_threshold = float(
+        os.environ.get("INSIGHTFACE_DETECTION_THRESHOLD", "0.45")
+    )
+    if not 0.2 <= detection_threshold <= 0.95:
+        raise ValueError(
+            "INSIGHTFACE_DETECTION_THRESHOLD debe estar entre 0.2 y 0.95."
+        )
     face_extractor = extractor or InsightFaceExtractor(
         model_name=os.environ.get("INSIGHTFACE_MODEL", "buffalo_l"),
         model_root=Path(os.environ.get("INSIGHTFACE_ROOT", "models/insightface")),
+        detection_threshold=detection_threshold,
         detection_size=(detection_size, detection_size),
     )
     service = AttendanceService(

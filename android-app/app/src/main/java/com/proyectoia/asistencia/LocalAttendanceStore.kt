@@ -745,26 +745,14 @@ class LocalAttendanceStore(context: Context) :
     ): LocalRecognitionBatch {
         val db = writableDatabase
         val registered = loadEmbeddings(db)
-        val rankedBySample = samples.map { sample ->
-            rankedScores(sample.embedding, registered, emptySet())
-        }
-        val candidates = rankedBySample.mapIndexedNotNull { index, scores ->
-            acceptedScore(scores)?.let { index to it }
-        }.sortedByDescending { (_, score) -> score.similarity }
-        val claimedStudents = mutableSetOf<String>()
-        val acceptedBySample = mutableMapOf<Int, StudentScore>()
-        candidates.forEach { (sampleIndex, score) ->
-            if (claimedStudents.add(score.studentId)) {
-                acceptedBySample[sampleIndex] = score
-            }
-        }
+        val plan = recognitionPlan(samples, registered)
         val results = mutableListOf<LocalRecognitionFace>()
 
         db.beginTransaction()
         try {
             for ((index, sample) in samples.withIndex()) {
-                val scores = rankedBySample[index]
-                val recognizedMatch = acceptedBySample[index]
+                val scores = plan.rankedBySample[index]
+                val recognizedMatch = plan.acceptedBySample[index]
                 val bestSimilarity = scores.firstOrNull()?.similarity ?: 0f
 
                 if (recognizedMatch == null) {
@@ -808,6 +796,26 @@ class LocalAttendanceStore(context: Context) :
             imageWidth,
             imageHeight
         )
+    }
+
+    fun previewRecognition(
+        samples: List<LocalFaceSample>,
+        imageWidth: Int,
+        imageHeight: Int
+    ): LocalRecognitionBatch {
+        val plan = recognitionPlan(samples, loadEmbeddings(readableDatabase))
+        val results = samples.mapIndexed { index, sample ->
+            val scores = plan.rankedBySample[index]
+            val accepted = plan.acceptedBySample[index]
+            LocalRecognitionFace(
+                Rect(sample.bounds),
+                accepted?.studentId,
+                accepted?.studentName,
+                accepted?.similarity ?: scores.firstOrNull()?.similarity ?: 0f,
+                false
+            )
+        }
+        return LocalRecognitionBatch(results, 0, imageWidth, imageHeight)
     }
 
     fun verifyRegistrationCandidate(
@@ -1097,6 +1105,26 @@ class LocalAttendanceStore(context: Context) :
         return best.takeIf { it.similarity >= SIMILARITY_THRESHOLD && hasMargin }
     }
 
+    private fun recognitionPlan(
+        samples: List<LocalFaceSample>,
+        registered: List<RegisteredEmbedding>
+    ): RecognitionPlan {
+        val rankedBySample = samples.map { sample ->
+            rankedScores(sample.embedding, registered, emptySet())
+        }
+        val candidates = rankedBySample.mapIndexedNotNull { index, scores ->
+            acceptedScore(scores)?.let { index to it }
+        }.sortedByDescending { (_, score) -> score.similarity }
+        val claimedStudents = mutableSetOf<String>()
+        val acceptedBySample = MutableList<StudentScore?>(samples.size) { null }
+        candidates.forEach { (sampleIndex, score) ->
+            if (claimedStudents.add(score.studentId)) {
+                acceptedBySample[sampleIndex] = score
+            }
+        }
+        return RecognitionPlan(rankedBySample, acceptedBySample)
+    }
+
     private data class RegisteredEmbedding(
         val studentId: String,
         val studentName: String,
@@ -1115,5 +1143,10 @@ class LocalAttendanceStore(context: Context) :
         val studentId: String,
         val studentName: String,
         val similarity: Float
+    )
+
+    private data class RecognitionPlan(
+        val rankedBySample: List<List<StudentScore>>,
+        val acceptedBySample: List<StudentScore?>
     )
 }

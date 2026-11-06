@@ -29,8 +29,8 @@ class InsightFaceExtractor:
         self,
         model_name: str = "buffalo_l",
         model_root: Path | str = Path("models/insightface"),
-        detection_threshold: float = 0.65,
-        detection_size: tuple[int, int] = (1024, 1024),
+        detection_threshold: float = 0.45,
+        detection_size: tuple[int, int] = (1280, 1280),
     ):
         self.model_name = model_name
         self.model_root = Path(model_root)
@@ -67,19 +67,43 @@ class InsightFaceExtractor:
             raise ValueError("La imagen debe tener tres canales BGR.")
 
         height, width = image.shape[:2]
-        extracted: list[ExtractedFace] = []
         with self._lock:
-            faces = self._load().get(image)
+            app = self._load()
+            extracted = self._convert_faces(app.get(image), width, height)
+            if width >= 800 and width / height >= 1.35:
+                tile_width = max(height, int(width * 0.65))
+                tile_width = min(tile_width, width)
+                for x_offset in sorted({0, width - tile_width}):
+                    tile = image[:, x_offset : x_offset + tile_width]
+                    extracted.extend(
+                        self._convert_faces(
+                            app.get(tile),
+                            width,
+                            height,
+                            x_offset=x_offset,
+                        )
+                    )
+
+        return self._remove_duplicates(extracted)
+
+    @staticmethod
+    def _convert_faces(
+        faces,
+        image_width: int,
+        image_height: int,
+        x_offset: int = 0,
+    ) -> list[ExtractedFace]:
+        extracted: list[ExtractedFace] = []
 
         for face in faces:
             embedding = face.normed_embedding
             if embedding is None:
                 continue
             x1, y1, x2, y2 = face.bbox.astype(int).tolist()
-            x1 = max(0, min(x1, width - 1))
-            y1 = max(0, min(y1, height - 1))
-            x2 = max(x1 + 1, min(x2, width))
-            y2 = max(y1 + 1, min(y2, height))
+            x1 = max(0, min(x1 + x_offset, image_width - 1))
+            y1 = max(0, min(y1, image_height - 1))
+            x2 = max(x1 + 1, min(x2 + x_offset, image_width))
+            y2 = max(y1 + 1, min(y2, image_height))
             extracted.append(
                 ExtractedFace(
                     box=BoundingBox(x1, y1, x2, y2),
@@ -88,4 +112,39 @@ class InsightFaceExtractor:
                 )
             )
         return extracted
+
+    @classmethod
+    def _remove_duplicates(
+        cls,
+        faces: list[ExtractedFace],
+    ) -> list[ExtractedFace]:
+        accepted: list[ExtractedFace] = []
+        for candidate in sorted(
+            faces,
+            key=lambda item: item.detection_confidence,
+            reverse=True,
+        ):
+            if any(
+                cls._overlap_over_smaller(candidate.box, kept.box) >= 0.55
+                for kept in accepted
+            ):
+                continue
+            accepted.append(candidate)
+        return sorted(accepted, key=lambda item: (item.box.x1, item.box.y1))
+
+    @staticmethod
+    def _overlap_over_smaller(first: BoundingBox, second: BoundingBox) -> float:
+        intersection_width = max(
+            0,
+            min(first.x2, second.x2) - max(first.x1, second.x1),
+        )
+        intersection_height = max(
+            0,
+            min(first.y2, second.y2) - max(first.y1, second.y1),
+        )
+        intersection = intersection_width * intersection_height
+        first_area = max(0, first.x2 - first.x1) * max(0, first.y2 - first.y1)
+        second_area = max(0, second.x2 - second.x1) * max(0, second.y2 - second.y1)
+        smaller_area = min(first_area, second_area)
+        return 0.0 if smaller_area == 0 else intersection / smaller_area
 

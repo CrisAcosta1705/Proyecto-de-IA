@@ -207,7 +207,7 @@ class MainActivity : ComponentActivity() {
         val options = FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
             .enableTracking()
-            .setMinFaceSize(0.05f)
+            .setMinFaceSize(0.03f)
             .build()
         FaceDetection.getClient(options)
     }
@@ -269,6 +269,11 @@ class MainActivity : ComponentActivity() {
         val bitmap: Bitmap,
         val samples: List<LocalFaceSample>,
         val faces: List<Face>
+    )
+
+    private data class LocalRecognitionPreparation(
+        val extraction: LocalFaceExtraction,
+        val preview: LocalRecognitionBatch
     )
 
     private data class CaptureQuality(
@@ -3175,6 +3180,9 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 ProcessingMode.AUTOMATIC -> {
+                    val localPreparation = runCatching {
+                        prepareLocalRecognition(jpeg)
+                    }
                     val serverResult = if (
                         selection.serverUrl != null &&
                         runCatching { isHealthyServer(selection.serverUrl) }.getOrDefault(false)
@@ -3183,12 +3191,26 @@ class MainActivity : ComponentActivity() {
                     } else {
                         null
                     }
-                    if (serverResult?.isSuccess == true) {
+                    val useLocal = localPreparation.isSuccess && (
+                        serverResult?.isSuccess != true ||
+                            preferLocalRecognition(
+                                localPreparation.getOrThrow().preview,
+                                serverResult.getOrThrow()
+                            )
+                        )
+                    if (useLocal) {
+                        showLocalRecognitionResult(
+                            commitLocalRecognition(
+                                selection,
+                                localPreparation.getOrThrow().extraction
+                            )
+                        )
+                    } else if (serverResult?.isSuccess == true) {
                         showRecognitionResult(serverResult.getOrThrow())
                     } else {
-                        showLocalRecognitionResult(
-                            recognizeLocally(selection, jpeg)
-                        )
+                        throw localPreparation.exceptionOrNull()
+                            ?: serverResult?.exceptionOrNull()
+                            ?: IOException(getString(R.string.server_unreachable))
                     }
                 }
             }
@@ -3413,8 +3435,24 @@ class MainActivity : ComponentActivity() {
         selection: AttendanceSelection,
         jpeg: ByteArray
     ): LocalRecognitionBatch {
+        return commitLocalRecognition(selection, prepareLocalRecognition(jpeg).extraction)
+    }
+
+    private fun prepareLocalRecognition(jpeg: ByteArray): LocalRecognitionPreparation {
         setProcessing(true, getString(R.string.local_processing))
         val extraction = extractLocalFaces(jpeg)
+        val preview = localStore.previewRecognition(
+            extraction.samples,
+            extraction.bitmap.width,
+            extraction.bitmap.height
+        )
+        return LocalRecognitionPreparation(extraction, preview)
+    }
+
+    private fun commitLocalRecognition(
+        selection: AttendanceSelection,
+        extraction: LocalFaceExtraction
+    ): LocalRecognitionBatch {
         val sessionId = localStore.createSession(
             selection.course,
             selection.attendanceDate
@@ -3428,14 +3466,31 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun preferLocalRecognition(
+        local: LocalRecognitionBatch,
+        server: JSONObject
+    ): Boolean {
+        val serverFaces = server.optInt(
+            "faces_detected",
+            server.optJSONArray("faces")?.length() ?: 0
+        )
+        val serverRecognized = server.optInt("recognized_count", 0)
+        return local.recognizedCount > serverRecognized ||
+            (
+                local.recognizedCount == serverRecognized &&
+                    local.faces.size > serverFaces
+                )
+    }
+
     private fun extractLocalFaces(jpeg: ByteArray): LocalFaceExtraction {
         val bitmap = decodeOrientedBitmap(jpeg)
             ?: throw IOException("No se pudo decodificar la fotografia.")
+        val analysisBitmap = scaleBitmapForFaceAnalysis(bitmap, 2_048)
         return extractLocalFacesFromBitmap(
-            bitmap,
-            localFaceDetector,
-            minimumFaceRatio = 0.05f,
-            minimumFacePixels = 72
+            analysisBitmap,
+            galleryFaceDetector,
+            minimumFaceRatio = 0.02f,
+            minimumFacePixels = 48
         )
     }
 
@@ -3569,6 +3624,7 @@ class MainActivity : ComponentActivity() {
         }
         if (lines.isEmpty()) lines += "No se detectaron rostros en la captura"
         runOnUiThread {
+            countText.text = getString(R.string.people_count, result.faces.size)
             showStatus("Modo telefono | Asistencia acumulada: ${result.attendanceCount}")
             lines.reversed().forEach(::appendHistory)
             showAnalyzedPhoto(overlayBoxes, result.imageWidth, result.imageHeight)
@@ -3616,6 +3672,7 @@ class MainActivity : ComponentActivity() {
         val imageWidth = result.getInt("image_width")
         val imageHeight = result.getInt("image_height")
         runOnUiThread {
+            countText.text = getString(R.string.people_count, faces.length())
             showStatus("Asistencia acumulada: $attendanceCount")
             lines.reversed().forEach(::appendHistory)
             showAnalyzedPhoto(
