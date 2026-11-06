@@ -4,7 +4,14 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.graphics.Rect
+import android.media.ExifInterface
+import android.os.ParcelFileDescriptor
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.LocalDate
@@ -100,6 +107,8 @@ class LocalAttendanceStore(context: Context) :
         private const val SIMILARITY_THRESHOLD = 0.45f
         private const val MINIMUM_SCORE_MARGIN = 0.07f
         private const val MAX_EMBEDDINGS_PER_STUDENT = 5
+        private const val THUMBNAIL_MAX_DIMENSION = 256
+        private const val REFERENCE_MAX_DIMENSION = 1600
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -252,9 +261,10 @@ class LocalAttendanceStore(context: Context) :
     }
 
     fun legacyFaceReferences(): List<LegacyFaceReference> {
-        return readableDatabase.rawQuery(
+        val db = readableDatabase
+        val references = db.rawQuery(
             """
-            SELECT id, student_id, photo_jpeg
+            SELECT id, student_id
             FROM face_embeddings
             WHERE model_id != ?
             ORDER BY id
@@ -264,13 +274,14 @@ class LocalAttendanceStore(context: Context) :
             buildList {
                 while (cursor.moveToNext()) {
                     add(
-                        LegacyFaceReference(
-                            embeddingId = cursor.getLong(0),
-                            studentId = cursor.getString(1),
-                            photoJpeg = cursor.getBlob(2)
-                        )
+                        cursor.getLong(0) to cursor.getString(1)
                     )
                 }
+            }
+        }
+        return references.mapNotNull { (embeddingId, studentId) ->
+            readFacePhotoBlob(db, embeddingId)?.let { photo ->
+                LegacyFaceReference(embeddingId, studentId, photo)
             }
         }
     }
@@ -337,16 +348,17 @@ class LocalAttendanceStore(context: Context) :
     }
 
     fun listStudents(): List<LocalStudentProfile> {
-        return readableDatabase.rawQuery(
+        val db = readableDatabase
+        val rows = db.rawQuery(
             """
             SELECT s.student_id, s.name, s.sex, COUNT(e.id) AS embedding_count,
                    (
-                       SELECT latest.photo_jpeg
+                       SELECT latest.id
                        FROM face_embeddings latest
                        WHERE latest.student_id = s.student_id
                        ORDER BY latest.id DESC
                        LIMIT 1
-                   ) AS photo_jpeg
+                   ) AS photo_embedding_id
             FROM students s
             LEFT JOIN face_embeddings e ON e.student_id = s.student_id
             GROUP BY s.student_id, s.name, s.sex
@@ -357,16 +369,29 @@ class LocalAttendanceStore(context: Context) :
             buildList {
                 while (cursor.moveToNext()) {
                     add(
-                        LocalStudentProfile(
-                            studentId = cursor.getString(0),
-                            name = cursor.getString(1),
-                            sex = cursor.getString(2),
-                            embeddingCount = cursor.getInt(3),
-                            photoJpeg = if (cursor.isNull(4)) null else cursor.getBlob(4)
+                        StudentProfileRow(
+                            cursor.getString(0),
+                            cursor.getString(1),
+                            cursor.getString(2),
+                            cursor.getInt(3),
+                            if (cursor.isNull(4)) null else cursor.getLong(4)
                         )
                     )
                 }
             }
+        }
+        return rows.map { row ->
+            LocalStudentProfile(
+                studentId = row.studentId,
+                name = row.name,
+                sex = row.sex,
+                embeddingCount = row.embeddingCount,
+                photoJpeg = row.photoEmbeddingId?.let { embeddingId ->
+                    readFacePhotoBlob(db, embeddingId)?.let { photo ->
+                        compactPhotoJpeg(photo, THUMBNAIL_MAX_DIMENSION, 82)
+                    }
+                }
+            )
         }
     }
 
@@ -397,9 +422,10 @@ class LocalAttendanceStore(context: Context) :
     }
 
     fun facePhotosForServerUpload(studentId: String): List<ByteArray> {
-        return readableDatabase.query(
+        val db = readableDatabase
+        val embeddingIds = db.query(
             "face_embeddings",
-            arrayOf("photo_jpeg"),
+            arrayOf("id"),
             "student_id = ?",
             arrayOf(studentId.trim()),
             null,
@@ -407,7 +433,12 @@ class LocalAttendanceStore(context: Context) :
             "id ASC"
         ).use { cursor ->
             buildList {
-                while (cursor.moveToNext()) add(cursor.getBlob(0))
+                while (cursor.moveToNext()) add(cursor.getLong(0))
+            }
+        }
+        return embeddingIds.mapNotNull { embeddingId ->
+            readFacePhotoBlob(db, embeddingId)?.let { photo ->
+                compactPhotoJpeg(photo, REFERENCE_MAX_DIMENSION, 90)
             }
         }
     }
@@ -872,6 +903,7 @@ class LocalAttendanceStore(context: Context) :
         embedding: FloatArray,
         photoJpeg: ByteArray
     ): Long {
+        val storedPhoto = compactPhotoJpeg(photoJpeg, REFERENCE_MAX_DIMENSION, 90) ?: photoJpeg
         val student = ContentValues().apply {
             put("name", name)
             put("sex", normalizeSex(sex))
@@ -889,7 +921,7 @@ class LocalAttendanceStore(context: Context) :
             ContentValues().apply {
                 put("student_id", studentId)
                 put("embedding", encodeEmbedding(embedding))
-                put("photo_jpeg", photoJpeg)
+                put("photo_jpeg", storedPhoto)
                 put("model_id", LocalFaceRecognizer.MODEL_ID)
                 put("created_at", System.currentTimeMillis())
             }
@@ -897,6 +929,92 @@ class LocalAttendanceStore(context: Context) :
         pruneEmbeddings(db, studentId)
         return embeddingId
     }
+
+    private fun readFacePhotoBlob(db: SQLiteDatabase, embeddingId: Long): ByteArray? {
+        val statement = db.compileStatement(
+            "SELECT photo_jpeg FROM face_embeddings WHERE id = ? LIMIT 1"
+        )
+        return try {
+            statement.bindLong(1, embeddingId)
+            val descriptor = statement.simpleQueryForBlobFileDescriptor()
+            if (descriptor == null) {
+                null
+            } else {
+                ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { it.readBytes() }
+            }
+        } finally {
+            statement.close()
+        }
+    }
+
+    private fun compactPhotoJpeg(
+        photoJpeg: ByteArray,
+        maxDimension: Int,
+        quality: Int
+    ): ByteArray? = runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(photoJpeg, 0, photoJpeg.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+
+        var sampleSize = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sampleSize > maxDimension * 2) {
+            sampleSize *= 2
+        }
+        val decoded = BitmapFactory.decodeByteArray(
+            photoJpeg,
+            0,
+            photoJpeg.size,
+            BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        ) ?: return@runCatching null
+
+        val rotation = runCatching {
+            ExifInterface(ByteArrayInputStream(photoJpeg)).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL
+            )
+        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        val degrees = when (rotation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f
+        }
+        val oriented = if (degrees == 0f) {
+            decoded
+        } else {
+            Bitmap.createBitmap(
+                decoded,
+                0,
+                0,
+                decoded.width,
+                decoded.height,
+                Matrix().apply { postRotate(degrees) },
+                true
+            ).also { decoded.recycle() }
+        }
+
+        val largestDimension = maxOf(oriented.width, oriented.height)
+        val scaled = if (largestDimension <= maxDimension) {
+            oriented
+        } else {
+            val scale = maxDimension.toFloat() / largestDimension
+            Bitmap.createScaledBitmap(
+                oriented,
+                (oriented.width * scale).toInt().coerceAtLeast(1),
+                (oriented.height * scale).toInt().coerceAtLeast(1),
+                true
+            ).also { oriented.recycle() }
+        }
+
+        ByteArrayOutputStream().use { output ->
+            if (!scaled.compress(Bitmap.CompressFormat.JPEG, quality, output)) {
+                scaled.recycle()
+                return@runCatching null
+            }
+            scaled.recycle()
+            output.toByteArray()
+        }
+    }.getOrNull()
 
     private fun normalizeSex(sex: String): String {
         return when (sex.trim().uppercase()) {
@@ -983,6 +1101,14 @@ class LocalAttendanceStore(context: Context) :
         val studentId: String,
         val studentName: String,
         val embedding: FloatArray
+    )
+
+    private data class StudentProfileRow(
+        val studentId: String,
+        val name: String,
+        val sex: String,
+        val embeddingCount: Int,
+        val photoEmbeddingId: Long?
     )
 
     private data class StudentScore(
