@@ -122,6 +122,12 @@ class MainActivity : ComponentActivity() {
     private lateinit var loginButton: Button
     private lateinit var cancelCredentialChangeButton: Button
     private lateinit var loggedInUserText: TextView
+    private lateinit var serverConfigurationDescriptionText: TextView
+    private lateinit var serverControlsPanel: View
+    private lateinit var syncStudentsButton: Button
+    private lateinit var uploadStudentsButton: Button
+    private lateinit var createLocalUserButton: Button
+    private lateinit var changeCredentialsButton: Button
     private lateinit var processingModeSpinner: Spinner
     private lateinit var serverUrlEditText: EditText
     private lateinit var attendanceDateEditText: EditText
@@ -197,6 +203,7 @@ class MainActivity : ComponentActivity() {
     private var currentStudentProfiles: List<StudentProfileData> = emptyList()
     private var authMode = AuthMode.LOGIN
     private var appServicesStarted = false
+    private var serverServicesStarted = false
     private val hideRecognitionResult = Runnable {
         isShowingRecognitionResult.set(false)
         capturedImageView.setImageDrawable(null)
@@ -243,7 +250,8 @@ class MainActivity : ComponentActivity() {
     private enum class AuthMode {
         LOGIN,
         INITIAL_SETUP,
-        CHANGE_CREDENTIALS
+        CHANGE_CREDENTIALS,
+        CREATE_LOCAL_USER
     }
 
     private enum class AppSection {
@@ -409,6 +417,14 @@ class MainActivity : ComponentActivity() {
         loginButton = findViewById(R.id.loginButton)
         cancelCredentialChangeButton = findViewById(R.id.cancelCredentialChangeButton)
         loggedInUserText = findViewById(R.id.loggedInUserText)
+        serverConfigurationDescriptionText = findViewById(
+            R.id.serverConfigurationDescriptionText
+        )
+        serverControlsPanel = findViewById(R.id.serverControlsPanel)
+        syncStudentsButton = findViewById(R.id.syncStudentsButton)
+        uploadStudentsButton = findViewById(R.id.uploadStudentsButton)
+        createLocalUserButton = findViewById(R.id.createLocalUserButton)
+        changeCredentialsButton = findViewById(R.id.changeCredentialsButton)
         ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
@@ -596,13 +612,16 @@ class MainActivity : ComponentActivity() {
         cameraSwitchButton.setOnClickListener {
             switchCamera()
         }
-        findViewById<Button>(R.id.syncStudentsButton).setOnClickListener {
+        syncStudentsButton.setOnClickListener {
             syncConfiguredServerStudents()
         }
-        findViewById<Button>(R.id.uploadStudentsButton).setOnClickListener {
+        uploadStudentsButton.setOnClickListener {
             confirmLocalStudentsUpload()
         }
-        findViewById<Button>(R.id.changeCredentialsButton).setOnClickListener {
+        createLocalUserButton.setOnClickListener {
+            showAuthenticationScreen(AuthMode.CREATE_LOCAL_USER)
+        }
+        changeCredentialsButton.setOnClickListener {
             showAuthenticationScreen(AuthMode.CHANGE_CREDENTIALS)
         }
         findViewById<Button>(R.id.logoutButton).setOnClickListener {
@@ -629,7 +648,10 @@ class MainActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (loginScreen.visibility == View.VISIBLE) {
-                    if (authMode == AuthMode.CHANGE_CREDENTIALS) {
+                    if (
+                        authMode == AuthMode.CHANGE_CREDENTIALS ||
+                        authMode == AuthMode.CREATE_LOCAL_USER
+                    ) {
                         showAuthenticatedApp()
                     } else {
                         finish()
@@ -702,7 +724,8 @@ class MainActivity : ComponentActivity() {
         confirmPasswordLabel.visibility = if (configuringAccess) View.VISIBLE else View.GONE
         loginConfirmPasswordEditText.visibility = if (configuringAccess) View.VISIBLE else View.GONE
         cancelCredentialChangeButton.visibility = if (
-            mode == AuthMode.CHANGE_CREDENTIALS
+            mode == AuthMode.CHANGE_CREDENTIALS ||
+            mode == AuthMode.CREATE_LOCAL_USER
         ) View.VISIBLE else View.GONE
 
         when (mode) {
@@ -723,6 +746,12 @@ class MainActivity : ComponentActivity() {
                 loginSubtitleText.setText(R.string.change_access_subtitle)
                 loginButton.setText(R.string.save_new_access)
                 loginUsernameEditText.setText(authStore.username())
+            }
+            AuthMode.CREATE_LOCAL_USER -> {
+                loginTitleText.setText(R.string.create_local_user_title)
+                loginSubtitleText.setText(R.string.create_local_user_subtitle)
+                loginButton.setText(R.string.create_local_user_action)
+                loginUsernameEditText.text.clear()
             }
         }
 
@@ -774,11 +803,39 @@ class MainActivity : ComponentActivity() {
                 loginErrorText.setText(R.string.passwords_do_not_match)
             }
             else -> {
-                authStore.createOrReplace(username, password.toCharArray())
-                val message = if (authMode == AuthMode.INITIAL_SETUP) {
-                    getString(R.string.access_created)
-                } else {
-                    getString(R.string.access_updated)
+                val passwordChars = password.toCharArray()
+                val message = when (authMode) {
+                    AuthMode.INITIAL_SETUP -> {
+                        authStore.createInitialAdministrator(username, passwordChars)
+                        getString(R.string.access_created)
+                    }
+                    AuthMode.CHANGE_CREDENTIALS -> {
+                        if (!authStore.updateCurrentCredentials(username, passwordChars)) {
+                            loginErrorText.setText(R.string.username_already_exists)
+                            return
+                        }
+                        getString(R.string.access_updated)
+                    }
+                    AuthMode.CREATE_LOCAL_USER -> {
+                        if (!authStore.isAdministrator()) {
+                            passwordChars.fill('\u0000')
+                            loginErrorText.setText(R.string.server_access_restricted)
+                            return
+                        }
+                        val created = runCatching {
+                            authStore.createLocalUser(username, passwordChars)
+                        }.getOrElse { error ->
+                            loginErrorText.text = error.message
+                                ?: getString(R.string.local_user_creation_failed)
+                            return
+                        }
+                        if (!created) {
+                            loginErrorText.setText(R.string.username_already_exists)
+                            return
+                        }
+                        getString(R.string.local_user_created, username)
+                    }
+                    AuthMode.LOGIN -> return
                 }
                 loginPasswordEditText.text.clear()
                 loginConfirmPasswordEditText.text.clear()
@@ -791,15 +848,46 @@ class MainActivity : ComponentActivity() {
         hideKeyboard()
         loginScreen.visibility = View.GONE
         appContent.visibility = View.VISIBLE
-        loggedInUserText.text = getString(R.string.logged_in_user, authStore.username())
+        configureAccessForCurrentUser()
         selectSection(activeSection, force = true)
         if (!appServicesStarted) {
             appServicesStarted = true
             ensureCameraPermission()
             preloadLocalModel()
+        }
+        if (authStore.isAdministrator() && !serverServicesStarted) {
+            serverServicesStarted = true
             connectFixedApiServer(showResult = false)
         }
         message?.let(::showStatus)
+    }
+
+    private fun configureAccessForCurrentUser() {
+        val administrator = authStore.isAdministrator()
+        val roleLabel = getString(
+            if (administrator) R.string.administrator_role else R.string.local_user_role
+        )
+        loggedInUserText.text = getString(
+            R.string.logged_in_user_with_role,
+            authStore.username(),
+            roleLabel
+        )
+        serverControlsPanel.visibility = if (administrator) View.VISIBLE else View.GONE
+        createLocalUserButton.visibility = if (administrator) View.VISIBLE else View.GONE
+        processingModeSpinner.isEnabled = administrator
+        if (administrator) {
+            serverConfigurationDescriptionText.setText(
+                R.string.server_configuration_description
+            )
+            val savedMode = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
+                .getInt(PROCESSING_MODE_KEY, ProcessingMode.AUTOMATIC.ordinal)
+                .coerceIn(0, ProcessingMode.entries.lastIndex)
+            processingModeSpinner.setSelection(savedMode)
+        } else {
+            serverConfigurationDescriptionText.setText(R.string.server_access_restricted)
+            processingModeSpinner.setSelection(ProcessingMode.PHONE.ordinal)
+            serverServicesStarted = false
+        }
     }
 
     private fun confirmLogout() {
@@ -809,6 +897,7 @@ class MainActivity : ComponentActivity() {
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.logout) { _, _ ->
                 authStore.logout()
+                serverServicesStarted = false
                 showAuthenticationScreen(AuthMode.LOGIN)
             }
             .show()
@@ -3988,6 +4077,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun normalizedServerUrl(): String? {
+        if (!authStore.isAdministrator()) {
+            showStatus(getString(R.string.server_access_restricted))
+            return null
+        }
         val value = BuildConfig.API_BASE_URL.trim().trimEnd('/')
         if (!value.startsWith("https://")) {
             showStatus("El servidor permanente debe utilizar HTTPS.")
@@ -3997,6 +4090,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun selectedProcessingMode(): ProcessingMode {
+        if (!authStore.isAdministrator()) {
+            if (processingModeSpinner.selectedItemPosition != ProcessingMode.PHONE.ordinal) {
+                runOnUiThread {
+                    processingModeSpinner.setSelection(ProcessingMode.PHONE.ordinal)
+                }
+            }
+            return ProcessingMode.PHONE
+        }
         val mode = ProcessingMode.entries.getOrElse(processingModeSpinner.selectedItemPosition) {
             ProcessingMode.AUTOMATIC
         }
@@ -4009,6 +4110,10 @@ class MainActivity : ComponentActivity() {
 
     private fun serverUrlFor(mode: ProcessingMode): String? {
         if (mode == ProcessingMode.PHONE) return null
+        if (!authStore.isAdministrator()) {
+            showStatus(getString(R.string.server_access_restricted))
+            return null
+        }
         return normalizedServerUrl()
     }
 
@@ -4024,6 +4129,10 @@ class MainActivity : ComponentActivity() {
 
     private fun connectFixedApiServer(showResult: Boolean) {
         if (!::networkExecutor.isInitialized || networkExecutor.isShutdown) return
+        if (!authStore.isAdministrator()) {
+            if (showResult) showStatus(getString(R.string.server_access_restricted))
+            return
+        }
         networkExecutor.execute {
             val serverUrl = BuildConfig.API_BASE_URL.trim().trimEnd('/')
             val available = runCatching { isHealthyServer(serverUrl) }.getOrDefault(false)
@@ -4055,6 +4164,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun isHealthyServer(baseUrl: String): Boolean {
+        if (!authStore.isAdministrator()) return false
         val connection = (URL("$baseUrl/health").openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 2_000
@@ -4231,6 +4341,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyApiAuthentication(connection: HttpURLConnection) {
+        if (!authStore.isAdministrator()) {
+            throw IOException(getString(R.string.server_access_restricted))
+        }
         BuildConfig.API_KEY.takeIf { it.isNotBlank() }?.let { apiKey ->
             connection.setRequestProperty("X-API-Key", apiKey)
         }

@@ -88,6 +88,7 @@
                 android:padding="18dp">
 
                 <TextView
+                    android:id="@+id/serverConfigurationDescriptionText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="@string/server_configuration_description"
@@ -95,6 +96,7 @@
                     android:textSize="14sp" />
 
                 <LinearLayout
+                    android:id="@+id/serverControlsPanel"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="16dp"
@@ -177,10 +179,18 @@
                         android:textSize="14sp" />
 
                     <Button
-                        android:id="@+id/changeCredentialsButton"
+                        android:id="@+id/createLocalUserButton"
                         android:layout_width="match_parent"
                         android:layout_height="52dp"
                         android:layout_marginTop="12dp"
+                        android:drawableStart="@android:drawable/ic_input_add"
+                        android:text="@string/create_local_user" />
+
+                    <Button
+                        android:id="@+id/changeCredentialsButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:layout_marginTop="10dp"
                         android:drawableStart="@android:drawable/ic_menu_edit"
                         android:text="@string/change_access" />
 
