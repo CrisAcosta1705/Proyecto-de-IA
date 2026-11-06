@@ -25,7 +25,11 @@ class _WideGroupApp:
         if self.calls == 2:
             return [
                 _face([100, 100, 200, 220], [1.0, 0.0, 0.0]),
-                _face([400, 100, 500, 220], [0.0, 1.0, 0.0]),
+                _face(
+                    [400, 100, 500, 220],
+                    [1.0, 1.0, 0.0],
+                    confidence=0.99,
+                ),
             ]
         return [
             _face([50, 100, 150, 220], [0.0, 1.0, 0.0]),
@@ -47,6 +51,8 @@ class InsightFaceExtractorTest(unittest.TestCase):
             [(face.box.x1, face.box.x2) for face in faces],
             [(100, 200), (400, 500), (800, 900)],
         )
+        center = next(face for face in faces if face.box.x1 == 400)
+        np.testing.assert_allclose(center.embedding, [0.0, 1.0, 0.0])
 
     def test_portrait_image_uses_one_detection_pass(self):
         app = _WideGroupApp()

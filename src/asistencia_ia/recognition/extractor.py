@@ -30,7 +30,7 @@ class InsightFaceExtractor:
         model_name: str = "buffalo_l",
         model_root: Path | str = Path("models/insightface"),
         detection_threshold: float = 0.45,
-        detection_size: tuple[int, int] = (1280, 1280),
+        detection_size: tuple[int, int] = (640, 640),
     ):
         self.model_name = model_name
         self.model_root = Path(model_root)
@@ -69,13 +69,14 @@ class InsightFaceExtractor:
         height, width = image.shape[:2]
         with self._lock:
             app = self._load()
-            extracted = self._convert_faces(app.get(image), width, height)
+            primary_faces = self._convert_faces(app.get(image), width, height)
+            supplemental_faces: list[ExtractedFace] = []
             if width >= 800 and width / height >= 1.35:
                 tile_width = max(height, int(width * 0.65))
                 tile_width = min(tile_width, width)
                 for x_offset in sorted({0, width - tile_width}):
                     tile = image[:, x_offset : x_offset + tile_width]
-                    extracted.extend(
+                    supplemental_faces.extend(
                         self._convert_faces(
                             app.get(tile),
                             width,
@@ -84,7 +85,7 @@ class InsightFaceExtractor:
                         )
                     )
 
-        return self._remove_duplicates(extracted)
+        return self._merge_supplemental_faces(primary_faces, supplemental_faces)
 
     @staticmethod
     def _convert_faces(
@@ -121,6 +122,26 @@ class InsightFaceExtractor:
         accepted: list[ExtractedFace] = []
         for candidate in sorted(
             faces,
+            key=lambda item: item.detection_confidence,
+            reverse=True,
+        ):
+            if any(
+                cls._overlap_over_smaller(candidate.box, kept.box) >= 0.55
+                for kept in accepted
+            ):
+                continue
+            accepted.append(candidate)
+        return sorted(accepted, key=lambda item: (item.box.x1, item.box.y1))
+
+    @classmethod
+    def _merge_supplemental_faces(
+        cls,
+        primary_faces: list[ExtractedFace],
+        supplemental_faces: list[ExtractedFace],
+    ) -> list[ExtractedFace]:
+        accepted = cls._remove_duplicates(primary_faces)
+        for candidate in sorted(
+            supplemental_faces,
             key=lambda item: item.detection_confidence,
             reverse=True,
         ):

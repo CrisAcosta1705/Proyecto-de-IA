@@ -105,7 +105,7 @@ class LocalAttendanceStore(context: Context) :
         private const val DATABASE_NAME = "asistencia_local.db"
         private const val DATABASE_VERSION = 4
         private const val SIMILARITY_THRESHOLD = 0.45f
-        private const val MINIMUM_SCORE_MARGIN = 0.07f
+        private const val MINIMUM_SCORE_MARGIN = 0.025f
         private const val MAX_EMBEDDINGS_PER_STUDENT = 5
         private const val THUMBNAIL_MAX_DIMENSION = 256
         private const val REFERENCE_MAX_DIMENSION = 1600
@@ -1112,15 +1112,21 @@ class LocalAttendanceStore(context: Context) :
         val rankedBySample = samples.map { sample ->
             rankedScores(sample.embedding, registered, emptySet())
         }
-        val candidates = rankedBySample.mapIndexedNotNull { index, scores ->
-            acceptedScore(scores)?.let { index to it }
-        }.sortedByDescending { (_, score) -> score.similarity }
         val claimedStudents = mutableSetOf<String>()
         val acceptedBySample = MutableList<StudentScore?>(samples.size) { null }
-        candidates.forEach { (sampleIndex, score) ->
-            if (claimedStudents.add(score.studentId)) {
-                acceptedBySample[sampleIndex] = score
+
+        val pendingSamples = rankedBySample.indices.toMutableSet()
+        while (pendingSamples.isNotEmpty()) {
+            val proposals = pendingSamples.mapNotNull { sampleIndex ->
+                val available = rankedBySample[sampleIndex]
+                    .filterNot { it.studentId in claimedStudents }
+                acceptedScore(available)?.let { sampleIndex to it }
             }
+            val selected = proposals.maxByOrNull { it.second.similarity } ?: break
+            val (sampleIndex, score) = selected
+            claimedStudents += score.studentId
+            pendingSamples -= sampleIndex
+            acceptedBySample[sampleIndex] = score
         }
         return RecognitionPlan(rankedBySample, acceptedBySample)
     }

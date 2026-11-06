@@ -141,7 +141,7 @@ US East, comprueba `/health` y monta un volumen persistente de 500 MB en
 | Secreto | `ASISTENCIA_API_KEY` | La misma clave configurada en Railway |
 
 La API usa `FACE_SIMILARITY_THRESHOLD=0.45`,
-`FACE_MINIMUM_SCORE_MARGIN=0.07` e `INSIGHTFACE_DETECTION_SIZE=1024` como
+`FACE_MINIMUM_SCORE_MARGIN=0.025` e `INSIGHTFACE_DETECTION_SIZE=640` como
 valores predeterminados. El margen evita aceptar identidades ambiguas y el
 tamaño de detección conserva más detalle en fotografías grupales. Estos valores
 pueden configurarse como variables de Railway después de calibrarlos con las

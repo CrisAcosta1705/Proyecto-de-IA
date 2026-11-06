@@ -38,7 +38,7 @@ class EmbeddingMatcher:
         self,
         references: Mapping[str, Sequence[ArrayLike]],
         threshold: float,
-        minimum_margin: float = 0.07,
+        minimum_margin: float = 0.025,
     ):
         if not -1.0 <= threshold <= 1.0:
             raise ValueError("El umbral debe estar entre -1 y 1.")
@@ -58,27 +58,35 @@ class EmbeddingMatcher:
         return self._match_from_scores(scores)
 
     def match_batch(self, queries: Sequence[ArrayLike]) -> list[RecognitionMatch]:
-        """Asigna cada estudiante a un solo rostro, priorizando la mejor similitud."""
+        """Asigna identidades unicas y reevalua candidatos que ya fueron usados."""
         ranked_scores = [self._ranked_scores(query) for query in queries]
         results = [self._rejected_match(scores) for scores in ranked_scores]
-        candidates: list[tuple[float, int, str]] = []
-
-        for face_index, scores in enumerate(ranked_scores):
-            candidate = self._match_from_scores(scores)
-            if candidate.accepted and candidate.student_id is not None:
-                candidates.append(
-                    (candidate.similarity, face_index, candidate.student_id)
-                )
-
+        pending_faces = set(range(len(ranked_scores)))
         claimed_students: set[str] = set()
-        for similarity, face_index, student_id in sorted(
-            candidates,
-            key=lambda item: item[0],
-            reverse=True,
-        ):
-            if student_id in claimed_students:
-                continue
+
+        while pending_faces:
+            proposals: list[tuple[float, int, str]] = []
+            for face_index in pending_faces:
+                available_scores = [
+                    score
+                    for score in ranked_scores[face_index]
+                    if score[0] not in claimed_students
+                ]
+                candidate = self._match_from_scores(available_scores)
+                if candidate.accepted and candidate.student_id is not None:
+                    proposals.append(
+                        (candidate.similarity, face_index, candidate.student_id)
+                    )
+
+            if not proposals:
+                break
+
+            similarity, face_index, student_id = max(
+                proposals,
+                key=lambda item: (item[0], -item[1], item[2]),
+            )
             claimed_students.add(student_id)
+            pending_faces.remove(face_index)
             results[face_index] = RecognitionMatch(
                 student_id=student_id,
                 similarity=similarity,

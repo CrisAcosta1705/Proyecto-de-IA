@@ -12,6 +12,7 @@ from asistencia_ia.recognition import (
     EmbeddingMatcher,
     FaceEmbeddingExtractor,
 )
+from asistencia_ia.recognition.matcher import cosine_similarity
 from asistencia_ia.storage import AttendanceDatabase
 
 
@@ -59,7 +60,7 @@ class AttendanceService:
         database: AttendanceDatabase,
         extractor: FaceEmbeddingExtractor,
         similarity_threshold: float = 0.45,
-        minimum_score_margin: float = 0.07,
+        minimum_score_margin: float = 0.025,
     ):
         self.database = database
         self.extractor = extractor
@@ -105,11 +106,26 @@ class AttendanceService:
                 f"se rechazaron {rejected_images}."
             )
         if not replace_embeddings:
-            existing = self.database.embedding_count(student_id)
-            if existing + len(embeddings) > 20:
+            existing_references = self.database.references().get(student_id, [])
+            novel_embeddings = []
+            known_embeddings = list(existing_references)
+            for embedding in embeddings:
+                if any(
+                    cosine_similarity(embedding, reference) >= 0.999
+                    for reference in known_embeddings
+                ):
+                    continue
+                novel_embeddings.append(embedding)
+                known_embeddings.append(embedding)
+            embeddings = novel_embeddings
+
+            if len(existing_references) + len(embeddings) > 20:
                 raise FaceProcessingError(
                     "Un estudiante no puede tener mas de 20 embeddings registrados."
                 )
+            if not embeddings:
+                self.database.update_student_profile(student_id, name, sex)
+                return 0
 
         return self.database.save_student(
             student_id,

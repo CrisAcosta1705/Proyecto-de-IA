@@ -164,6 +164,24 @@ class AttendanceServiceTest(unittest.TestCase):
         self.assertEqual(added, 1)
         self.assertEqual(self.database.embedding_count("estudiante_001"), 1)
 
+    def test_appending_same_reference_is_idempotent(self) -> None:
+        self.extractor.faces = [_face([1.0, 0.0])]
+        self.service.register_student(
+            "estudiante_001",
+            "Estudiante Uno",
+            [_image_bytes()],
+        )
+
+        added = self.service.register_student(
+            "estudiante_001",
+            "Estudiante Uno",
+            [_image_bytes()],
+            replace_embeddings=False,
+        )
+
+        self.assertEqual(added, 0)
+        self.assertEqual(self.database.embedding_count("estudiante_001"), 1)
+
     def test_clear_recognition_preserves_student_and_removes_biometrics(self) -> None:
         self.extractor.faces = [_face([1.0, 0.0])]
         self.service.register_student(

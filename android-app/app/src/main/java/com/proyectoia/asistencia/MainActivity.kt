@@ -1833,6 +1833,12 @@ class MainActivity : ComponentActivity() {
                         )
                         val recognized = result.faces.singleOrNull()
                         val passed = recognized?.studentId == context.studentId
+                        if (passed && guidedSamples.size < 5) {
+                            guidedSamples += GuidedRegistrationSample(
+                                extraction.samples.single().embedding,
+                                jpeg
+                            )
+                        }
                         showFrozenRegistrationVerification(
                             extraction.bitmap,
                             recognized,
@@ -2923,7 +2929,7 @@ class MainActivity : ComponentActivity() {
                         student.name,
                         student.sex,
                         photos,
-                        replace = true
+                        replace = false
                     )
                     uploaded++
                 } catch (error: Exception) {

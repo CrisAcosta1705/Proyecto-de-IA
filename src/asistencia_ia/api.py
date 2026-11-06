@@ -59,11 +59,11 @@ def create_app(
         else float(os.environ.get("FACE_SIMILARITY_THRESHOLD", "0.45"))
     )
     minimum_score_margin = float(
-        os.environ.get("FACE_MINIMUM_SCORE_MARGIN", "0.07")
+        os.environ.get("FACE_MINIMUM_SCORE_MARGIN", "0.025")
     )
     database = AttendanceDatabase(db_path)
     database.initialize()
-    detection_size = int(os.environ.get("INSIGHTFACE_DETECTION_SIZE", "1280"))
+    detection_size = int(os.environ.get("INSIGHTFACE_DETECTION_SIZE", "640"))
     if not 320 <= detection_size <= 2048:
         raise ValueError("INSIGHTFACE_DETECTION_SIZE debe estar entre 320 y 2048.")
     detection_threshold = float(

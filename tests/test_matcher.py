@@ -78,6 +78,29 @@ class EmbeddingMatcherTest(unittest.TestCase):
             set(references),
         )
 
+    def test_batch_retries_second_candidate_after_best_identity_is_claimed(self) -> None:
+        matcher = EmbeddingMatcher(
+            {
+                "estudiante_001": [np.array([1.0, 0.0, 0.0])],
+                "estudiante_002": [np.array([0.8, 0.6, 0.0])],
+            },
+            threshold=0.7,
+            minimum_margin=0.02,
+        )
+
+        results = matcher.match_batch(
+            [
+                np.array([1.0, 0.0, 0.0]),
+                np.array([0.95, 0.312, 0.0]),
+            ]
+        )
+
+        self.assertEqual(
+            [result.student_id for result in results],
+            ["estudiante_001", "estudiante_002"],
+        )
+        self.assertTrue(all(result.accepted for result in results))
+
     def test_zero_embedding_is_invalid(self) -> None:
         with self.assertRaises(ValueError):
             self.matcher.match([0.0, 0.0])
