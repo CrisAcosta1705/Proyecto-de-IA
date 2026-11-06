@@ -88,29 +88,35 @@ class AttendanceService:
             raise FaceProcessingError("El sexo debe ser MASCULINO o FEMENINO.")
         if not 1 <= len(image_contents) <= 20:
             raise FaceProcessingError("Se requieren entre 1 y 20 fotos de registro.")
+        embeddings = []
+        valid_images = []
+        rejected_images = 0
+        for content in image_contents:
+            faces = self.extractor.extract(decode_image(content))
+            if len(faces) != 1:
+                rejected_images += 1
+                continue
+            embeddings.append(faces[0].embedding)
+            valid_images.append(content)
+
+        if not embeddings:
+            raise FaceProcessingError(
+                "Ninguna foto contiene exactamente un rostro detectable; "
+                f"se rechazaron {rejected_images}."
+            )
         if not replace_embeddings:
             existing = self.database.embedding_count(student_id)
-            if existing + len(image_contents) > 20:
+            if existing + len(embeddings) > 20:
                 raise FaceProcessingError(
                     "Un estudiante no puede tener mas de 20 embeddings registrados."
                 )
-
-        embeddings = []
-        for index, content in enumerate(image_contents, start=1):
-            faces = self.extractor.extract(decode_image(content))
-            if len(faces) != 1:
-                raise FaceProcessingError(
-                    f"La foto {index} debe contener exactamente un rostro; "
-                    f"se detectaron {len(faces)}."
-                )
-            embeddings.append(faces[0].embedding)
 
         return self.database.save_student(
             student_id,
             name,
             embeddings,
             replace_embeddings=replace_embeddings,
-            photo=image_contents[0],
+            photo=valid_images[0],
             photo_mime_type=photo_mime_type,
             sex=sex,
         )

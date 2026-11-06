@@ -150,6 +150,20 @@ class AttendanceServiceTest(unittest.TestCase):
                 [_image_bytes()],
             )
 
+    def test_registration_keeps_valid_references_when_another_photo_fails(self) -> None:
+        valid_face = _face([1.0, 0.0])
+        responses = iter([[valid_face], []])
+        self.extractor.extract = lambda image: next(responses)
+
+        added = self.service.register_student(
+            "estudiante_001",
+            "Estudiante Uno",
+            [_image_bytes(), _image_bytes()],
+        )
+
+        self.assertEqual(added, 1)
+        self.assertEqual(self.database.embedding_count("estudiante_001"), 1)
+
     def test_clear_recognition_preserves_student_and_removes_biometrics(self) -> None:
         self.extractor.faces = [_face([1.0, 0.0])]
         self.service.register_student(
