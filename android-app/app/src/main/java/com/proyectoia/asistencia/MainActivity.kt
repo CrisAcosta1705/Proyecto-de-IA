@@ -14,6 +14,8 @@ import android.graphics.Rect
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Bundle
+import android.os.CountDownTimer
+import android.os.Looper
 import android.provider.OpenableColumns
 import android.text.InputType
 import android.util.Log
@@ -138,6 +140,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var capturedImageView: ImageView
     private lateinit var faceOverlay: FaceBoxOverlay
     private lateinit var registrationFaceOverlay: FaceBoxOverlay
+    private lateinit var registrationDirectionArrowText: TextView
+    private lateinit var registrationCountdownText: TextView
     private lateinit var imageCapture: ImageCapture
     private lateinit var cameraSwitchButton: Button
     private lateinit var registrationInstructionText: TextView
@@ -185,6 +189,7 @@ class MainActivity : ComponentActivity() {
     @Volatile private var guidedVerificationActive = false
     @Volatile private var guidedPoseIndex = -1
     private var guidedStableFrames = 0
+    private var verificationCountdown: CountDownTimer? = null
     private val guidedSamples = mutableListOf<GuidedRegistrationSample>()
     private var guidedContext: GuidedRegistrationContext? = null
     private var pendingGalleryUpdateContext: GuidedRegistrationContext? = null
@@ -253,11 +258,11 @@ class MainActivity : ComponentActivity() {
         REGISTRATION
     }
 
-    private enum class GuidedPose(val instructionRes: Int) {
-        FRONT(R.string.registration_front_instruction),
-        PROFILE(R.string.registration_profile_instruction),
-        UP(R.string.registration_up_instruction),
-        DOWN(R.string.registration_down_instruction)
+    private enum class GuidedPose(val instructionRes: Int, val arrowRes: Int?) {
+        FRONT(R.string.registration_front_instruction, null),
+        PROFILE(R.string.registration_profile_instruction, R.string.registration_arrow_profile),
+        UP(R.string.registration_up_instruction, R.string.registration_arrow_up),
+        DOWN(R.string.registration_down_instruction, R.string.registration_arrow_down)
     }
 
     private data class LocalFaceExtraction(
@@ -422,6 +427,10 @@ class MainActivity : ComponentActivity() {
         capturedImageView = findViewById(R.id.capturedImageView)
         faceOverlay = findViewById(R.id.faceOverlay)
         registrationFaceOverlay = findViewById(R.id.registrationFaceOverlay)
+        registrationDirectionArrowText = findViewById(
+            R.id.registrationDirectionArrowText
+        )
+        registrationCountdownText = findViewById(R.id.registrationCountdownText)
         cameraSwitchButton = findViewById(R.id.cameraSwitchButton)
         registrationInstructionText = findViewById(R.id.registrationInstructionText)
         registrationStepText = findViewById(R.id.registrationStepText)
@@ -657,6 +666,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        stopVerificationCountdown()
         super.onDestroy()
         faceOverlay.removeCallbacks(hideRecognitionResult)
         faceDetector.close()
@@ -1262,6 +1272,7 @@ class MainActivity : ComponentActivity() {
         guidedStableFrames = 0
         guidedRegistrationActive = true
         guidedVerificationActive = false
+        stopVerificationCountdown()
         isGuidedCaptureRunning.set(false)
         registrationCapturedImageView.setImageDrawable(null)
         registrationCapturedImageView.visibility = View.GONE
@@ -1281,6 +1292,7 @@ class MainActivity : ComponentActivity() {
     private fun cancelGuidedRegistration() {
         guidedRegistrationActive = false
         guidedVerificationActive = false
+        stopVerificationCountdown()
         guidedPoseIndex = -1
         guidedStableFrames = 0
         guidedSamples.clear()
@@ -1294,6 +1306,7 @@ class MainActivity : ComponentActivity() {
         registrationCapturedImageView.setImageDrawable(null)
         registrationCapturedImageView.visibility = View.GONE
         registrationFaceOverlay.clear()
+        registrationDirectionArrowText.visibility = View.GONE
         poseStatusViews.forEach {
             it.setBackgroundResource(R.drawable.pose_pending_background)
             it.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
@@ -1324,7 +1337,38 @@ class MainActivity : ComponentActivity() {
                 guidedSamples.size
             )
             registrationInstructionText.setText(pose.instructionRes)
+            showGuidedDirectionArrow(pose)
         }
+    }
+
+    private fun showGuidedDirectionArrow(pose: GuidedPose) {
+        val arrowRes = pose.arrowRes
+        if (arrowRes == null) {
+            registrationDirectionArrowText.visibility = View.GONE
+            return
+        }
+        val layout = registrationDirectionArrowText.layoutParams as FrameLayout.LayoutParams
+        layout.setMargins(0, 0, 0, 0)
+        layout.marginStart = 0
+        layout.marginEnd = 0
+        when (pose) {
+            GuidedPose.PROFILE -> {
+                layout.gravity = Gravity.CENTER_VERTICAL or Gravity.END
+                layout.marginEnd = dp(18)
+            }
+            GuidedPose.UP -> {
+                layout.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                layout.topMargin = dp(72)
+            }
+            GuidedPose.DOWN -> {
+                layout.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                layout.bottomMargin = dp(78)
+            }
+            GuidedPose.FRONT -> Unit
+        }
+        registrationDirectionArrowText.layoutParams = layout
+        registrationDirectionArrowText.setText(arrowRes)
+        registrationDirectionArrowText.visibility = View.VISIBLE
     }
 
     private fun processGuidedRegistrationFrame(evaluation: GuidedFrameEvaluation) {
@@ -1546,6 +1590,7 @@ class MainActivity : ComponentActivity() {
     private fun captureGuidedPose(pose: GuidedPose) {
         if (!isGuidedCaptureRunning.compareAndSet(false, true)) return
         runOnUiThread {
+            registrationDirectionArrowText.visibility = View.GONE
             registrationInstructionText.setText(R.string.registration_processing_pose)
         }
         capturePhoto(
@@ -1611,6 +1656,7 @@ class MainActivity : ComponentActivity() {
                             registrationInstructionText.setText(
                                 R.string.registration_pose_rejected
                             )
+                            showGuidedDirectionArrow(pose)
                         }
                     }
                 }
@@ -1626,8 +1672,10 @@ class MainActivity : ComponentActivity() {
     private fun promptGuidedRecognitionTest() {
         guidedVerificationActive = false
         guidedStableFrames = 0
+        stopVerificationCountdown()
         runOnUiThread {
             registrationFaceOverlay.clear()
+            registrationDirectionArrowText.visibility = View.GONE
             registrationInstructionText.setText(R.string.registration_verification_prompt)
             registrationFullscreenStepText.setText(R.string.registration_fullscreen_verification)
             AlertDialog.Builder(this)
@@ -1645,12 +1693,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startGuidedRecognitionTest() {
+        stopVerificationCountdown()
         guidedVerificationActive = true
         guidedStableFrames = 0
         isGuidedCaptureRunning.set(false)
         registrationCapturedImageView.setImageDrawable(null)
         registrationCapturedImageView.visibility = View.GONE
         registrationFaceOverlay.clear()
+        registrationDirectionArrowText.visibility = View.GONE
         registrationInstructionText.setText(
             R.string.registration_verification_front_instruction
         )
@@ -1659,7 +1709,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun processGuidedVerificationFrame(evaluation: GuidedFrameEvaluation) {
-        if (!guidedVerificationActive || isGuidedCaptureRunning.get()) return
+        if (
+            !guidedVerificationActive ||
+            isGuidedCaptureRunning.get() ||
+            verificationCountdown != null
+        ) return
         if (!evaluation.accepted) {
             guidedStableFrames = if (evaluation.qualityIssue) {
                 (guidedStableFrames - 1).coerceAtLeast(0)
@@ -1679,13 +1733,62 @@ class MainActivity : ComponentActivity() {
         }
         if (guidedStableFrames < GUIDED_STABLE_FRAMES) return
         guidedStableFrames = 0
-        captureGuidedRecognitionTest()
+        runOnUiThread { startGuidedVerificationCountdown() }
+    }
+
+    private fun startGuidedVerificationCountdown() {
+        if (!guidedVerificationActive || verificationCountdown != null) return
+        guidedVerificationActive = false
+        guidedStableFrames = 0
+        registrationDirectionArrowText.visibility = View.GONE
+        registrationCountdownText.text = "3"
+        registrationCountdownText.visibility = View.VISIBLE
+        registrationInstructionText.text = getString(
+            R.string.registration_verification_countdown,
+            3
+        )
+        verificationCountdown = object : CountDownTimer(3_000L, 1_000L) {
+            override fun onTick(millisUntilFinished: Long) {
+                val seconds = ((millisUntilFinished + 999L) / 1_000L)
+                    .toInt()
+                    .coerceIn(1, 3)
+                registrationCountdownText.text = seconds.toString()
+                registrationInstructionText.text = getString(
+                    R.string.registration_verification_countdown,
+                    seconds
+                )
+            }
+
+            override fun onFinish() {
+                verificationCountdown = null
+                registrationCountdownText.visibility = View.GONE
+                if (!guidedRegistrationActive || guidedContext == null) return
+                captureGuidedRecognitionTest()
+            }
+        }.start()
+    }
+
+    private fun stopVerificationCountdown() {
+        verificationCountdown?.cancel()
+        verificationCountdown = null
+        if (::registrationCountdownText.isInitialized) {
+            val hideCountdown = Runnable {
+                registrationCountdownText.visibility = View.GONE
+                registrationCountdownText.text = ""
+            }
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                hideCountdown.run()
+            } else {
+                registrationCountdownText.post(hideCountdown)
+            }
+        }
     }
 
     private fun captureGuidedRecognitionTest() {
         if (!isGuidedCaptureRunning.compareAndSet(false, true)) return
         guidedVerificationActive = false
         runOnUiThread {
+            registrationCountdownText.visibility = View.GONE
             registrationInstructionText.setText(R.string.registration_verification_processing)
         }
         capturePhoto(
@@ -1837,6 +1940,7 @@ class MainActivity : ComponentActivity() {
         val context = guidedContext ?: return
         guidedRegistrationActive = false
         guidedVerificationActive = false
+        stopVerificationCountdown()
         setProcessing(true, getString(R.string.registration_saving))
         runOnUiThread {
             registrationInstructionText.setText(R.string.registration_saving)
@@ -1903,6 +2007,7 @@ class MainActivity : ComponentActivity() {
         runOnUiThread {
             guidedRegistrationActive = false
             guidedVerificationActive = false
+            stopVerificationCountdown()
             guidedPoseIndex = -1
             guidedStableFrames = 0
             guidedSamples.clear()
@@ -1916,6 +2021,7 @@ class MainActivity : ComponentActivity() {
             registrationCapturedImageView.setImageDrawable(null)
             registrationCapturedImageView.visibility = View.GONE
             registrationFaceOverlay.clear()
+            registrationDirectionArrowText.visibility = View.GONE
             if (fullscreenCameraMode == FullscreenCameraMode.REGISTRATION) {
                 exitCameraFullscreen()
             }

@@ -693,6 +693,35 @@
                         android:layout_height="match_parent" />
 
                     <TextView
+                        android:id="@+id/registrationDirectionArrowText"
+                        android:layout_width="88dp"
+                        android:layout_height="88dp"
+                        android:layout_gravity="center_vertical|end"
+                        android:layout_margin="18dp"
+                        android:background="@drawable/direction_arrow_background"
+                        android:contentDescription="@string/registration_direction_arrow_content_description"
+                        android:elevation="6dp"
+                        android:gravity="center"
+                        android:textColor="@color/surface"
+                        android:textSize="54sp"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/registrationCountdownText"
+                        android:layout_width="128dp"
+                        android:layout_height="128dp"
+                        android:layout_gravity="center"
+                        android:background="@drawable/verification_countdown_background"
+                        android:contentDescription="@string/registration_countdown_content_description"
+                        android:elevation="8dp"
+                        android:gravity="center"
+                        android:textColor="@color/surface"
+                        android:textSize="72sp"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
+
+                    <TextView
                         android:id="@+id/registrationInstructionText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"

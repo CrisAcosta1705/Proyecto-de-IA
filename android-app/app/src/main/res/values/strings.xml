@@ -171,6 +171,10 @@
     <string name="registration_profile_instruction">Gira lentamente el rostro hacia un lado.</string>
     <string name="registration_up_instruction">Levanta lentamente el rostro.</string>
     <string name="registration_down_instruction">Baja lentamente el rostro.</string>
+    <string name="registration_direction_arrow_content_description">Dirección del movimiento facial</string>
+    <string name="registration_arrow_profile">&#x2194;</string>
+    <string name="registration_arrow_up">&#x2191;</string>
+    <string name="registration_arrow_down">&#x2193;</string>
     <string name="registration_hold_instruction">Mantente estable...</string>
     <string name="registration_hold_quality_instruction">Posicion y calidad correctas. Mantente estable (%1$d de %2$d).</string>
     <string name="registration_no_face_quality">Coloca el rostro completo dentro de la camara.</string>
@@ -196,12 +200,14 @@
     <string name="registration_cancelled">Recorrido facial cancelado.</string>
     <string name="registration_complete_four">Registro facial verificado para %1$s con cuatro posiciones.</string>
     <string name="registration_verification_title">Prueba final de reconocimiento</string>
-    <string name="registration_verification_message">El recorrido de cuatro posiciones termino. Ahora se tomara una fotografia frontal congelada y se procesara con las mismas reglas del reconocimiento local de asistencia. El registro solo se guardara si la identidad coincide.</string>
+    <string name="registration_verification_message">El recorrido de cuatro posiciones terminó. Mira de frente durante la prueba. Cuando la posición y la calidad sean correctas, aparecerá un contador de 3 segundos y la fotografía se tomará automáticamente. El registro solo se guardará si la identidad coincide.</string>
     <string name="registration_verification_prompt">Recorrido completo. Inicia la prueba final de reconocimiento.</string>
     <string name="registration_verification_start">Iniciar prueba</string>
     <string name="registration_verification_front_instruction">Mira de frente, con buena luz, y mantente estable para la prueba.</string>
     <string name="registration_verification_live">Prueba activa. La app capturara cuando el rostro y la calidad sean correctos.</string>
     <string name="registration_verification_hold">Calidad correcta. Preparando la prueba (%1$d de %2$d).</string>
+    <string name="registration_verification_countdown">Mantente de frente. Fotografía en %1$d...</string>
+    <string name="registration_countdown_content_description">Cuenta regresiva para tomar la fotografía</string>
     <string name="registration_verification_processing">Fotografia congelada. Verificando la identidad...</string>
     <string name="registration_verification_not_recognized">El rostro no alcanzo el umbral o se confundio con otro registro.</string>
     <string name="registration_verification_overlay_passed">%1$s | Verificado</string>

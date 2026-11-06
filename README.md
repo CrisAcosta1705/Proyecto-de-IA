@@ -181,8 +181,10 @@ servicio antes de cambiar `INSIGHTFACE_MODEL`.
    abre `Config.`, pulsa `Subir registros del telefono` y confirma la operacion.
 5. Abre `Registro`, ingresa nombre, carnet y sexo, y pulsa `Iniciar recorrido facial`.
 6. Mueve el rostro siguiendo las indicaciones: frontal, perfil, arriba y abajo.
-   La app analiza el video, exige varios frames estables y guarda automaticamente
-   una referencia clara por posicion.
+   La cámara muestra flechas para indicar la dirección, analiza el video, exige
+   varios frames estables y guarda automáticamente una referencia clara por
+   posición. Al finalizar, la prueba frontal muestra una cuenta regresiva de
+   tres segundos antes de tomar la fotografía de verificación.
 7. Abre `Asistencia`, selecciona materia y fecha, y pulsa `Reconocer asistencia`.
 8. Puedes tomar varias fotografias para la misma materia y fecha. Cada captura
    agrega estudiantes nuevos y conserva una sola asistencia por carnet.
