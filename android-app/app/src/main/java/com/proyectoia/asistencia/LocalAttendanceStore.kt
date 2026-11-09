@@ -145,7 +145,9 @@ class LocalAttendanceStore(context: Context) :
         super.onConfigure(db)
         db.setForeignKeyConstraintsEnabled(true)
         db.execSQL("PRAGMA secure_delete = ON")
-        db.execSQL("PRAGMA temp_store = MEMORY")
+        db.rawQuery("PRAGMA temp_store = MEMORY", null).use { cursor ->
+            cursor.moveToFirst()
+        }
     }
 
     override fun onCreate(db: SQLiteDatabase) {
