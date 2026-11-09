@@ -242,6 +242,26 @@
     <string name="registration_fullscreen_progress">%1$d de 4 posiciones</string>
     <string name="capture_attendance_photo">Tomar foto para asistencia</string>
     <string name="face_reference_actions">Referencias faciales</string>
+    <string name="view_face_references">Ver y administrar referencias</string>
+    <string name="face_references_title">Referencias de %1$s</string>
+    <string name="face_references_summary">%1$d de 5 referencias almacenadas en el telefono.</string>
+    <string name="no_face_references">Este estudiante no tiene referencias faciales almacenadas en el telefono.</string>
+    <string name="face_reference_number">Referencia %1$d</string>
+    <string name="face_reference_date">Registrada: %1$s</string>
+    <string name="face_reference_photo_description">Fotografia de la referencia %1$d</string>
+    <string name="face_reference_preview_title">Referencia %1$d de %2$s</string>
+    <string name="replace_face_reference">Cambiar referencia</string>
+    <string name="delete_face_reference">Eliminar referencia</string>
+    <string name="replace_face_reference_processing">Analizando la nueva referencia facial&#8230;</string>
+    <string name="face_reference_replaced">La referencia facial de %1$s fue reemplazada.</string>
+    <string name="delete_face_reference_title">Eliminar referencia facial</string>
+    <string name="delete_face_reference_message">Se eliminara solamente esta referencia de %1$s. El estudiante y sus asistencias se conservaran.</string>
+    <plurals name="face_reference_deleted">
+        <item quantity="one">Referencia eliminada. Queda %1$d referencia para %2$s.</item>
+        <item quantity="other">Referencia eliminada. Quedan %1$d referencias para %2$s.</item>
+    </plurals>
+    <string name="face_reference_not_found">La referencia facial ya no existe.</string>
+    <string name="face_reference_server_warning">El cambio se guardo en el telefono, pero no pudo sincronizarse con el servidor: %1$s</string>
     <string name="update_face_references">Actualizar referencias faciales</string>
     <string name="delete_student_permanently">Eliminar estudiante permanentemente</string>
     <string name="delete_student_title">Eliminar estudiante</string>

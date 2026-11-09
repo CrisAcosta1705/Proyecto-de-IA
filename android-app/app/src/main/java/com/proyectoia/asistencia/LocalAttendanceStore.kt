@@ -63,6 +63,13 @@ data class LegacyFaceReference(
     val photoJpeg: ByteArray
 )
 
+data class LocalFaceReference(
+    val referenceId: Long,
+    val studentId: String,
+    val photoJpeg: ByteArray,
+    val createdAt: Long
+)
+
 data class LocalAttendanceSummary(
     val sessionId: Long,
     val course: String,
@@ -474,6 +481,95 @@ class LocalAttendanceStore(context: Context) :
             readFacePhotoBlob(db, embeddingId)?.let { photo ->
                 compactPhotoJpeg(photo, REFERENCE_MAX_DIMENSION, 90)
             }
+        }
+    }
+
+    fun faceReferences(studentId: String): List<LocalFaceReference> {
+        val cleanId = studentId.trim()
+        val db = readableDatabase
+        val rows = db.query(
+            "face_embeddings",
+            arrayOf("id", "created_at"),
+            "student_id = ?",
+            arrayOf(cleanId),
+            null,
+            null,
+            "id ASC"
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(cursor.getLong(0) to cursor.getLong(1))
+                }
+            }
+        }
+        return rows.mapNotNull { (referenceId, createdAt) ->
+            readFacePhotoBlob(db, referenceId)?.let { photo ->
+                LocalFaceReference(
+                    referenceId = referenceId,
+                    studentId = cleanId,
+                    photoJpeg = compactPhotoJpeg(photo, 640, 86) ?: photo,
+                    createdAt = createdAt
+                )
+            }
+        }
+    }
+
+    fun replaceFaceReference(
+        studentId: String,
+        referenceId: Long,
+        embedding: FloatArray,
+        photoJpeg: ByteArray
+    ): Boolean {
+        val cleanId = studentId.trim()
+        val storedPhoto = compactPhotoJpeg(photoJpeg, REFERENCE_MAX_DIMENSION, 90)
+            ?: photoJpeg
+        val db = writableDatabase
+        db.beginTransaction()
+        return try {
+            val updated = db.update(
+                "face_embeddings",
+                ContentValues().apply {
+                    put("embedding", encodeEmbedding(embedding))
+                    put("photo_jpeg", storedPhoto)
+                    put("model_id", LocalFaceRecognizer.MODEL_ID)
+                    put("created_at", System.currentTimeMillis())
+                },
+                "id = ? AND student_id = ?",
+                arrayOf(referenceId.toString(), cleanId)
+            ) > 0
+            if (updated) {
+                db.delete("server_imports", "student_id = ?", arrayOf(cleanId))
+                db.setTransactionSuccessful()
+            }
+            updated
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun deleteFaceReference(studentId: String, referenceId: Long): Int? {
+        val cleanId = studentId.trim()
+        val db = writableDatabase
+        db.beginTransaction()
+        return try {
+            val deleted = db.delete(
+                "face_embeddings",
+                "id = ? AND student_id = ?",
+                arrayOf(referenceId.toString(), cleanId)
+            )
+            if (deleted == 0) return null
+            db.delete("server_imports", "student_id = ?", arrayOf(cleanId))
+            val remaining = db.rawQuery(
+                "SELECT COUNT(*) FROM face_embeddings WHERE student_id = ?",
+                arrayOf(cleanId)
+            ).use { cursor ->
+                cursor.moveToFirst()
+                cursor.getInt(0)
+            }
+            db.setTransactionSuccessful()
+            remaining
+        } finally {
+            db.endTransaction()
         }
     }
 

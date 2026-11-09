@@ -77,7 +77,9 @@ import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.text.DateFormat
 import java.time.LocalDate
+import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -199,6 +201,7 @@ class MainActivity : ComponentActivity() {
     private val guidedSamples = mutableListOf<GuidedRegistrationSample>()
     private var guidedContext: GuidedRegistrationContext? = null
     private var pendingGalleryUpdateContext: GuidedRegistrationContext? = null
+    private var pendingReferenceReplacementContext: FaceReferenceReplacementContext? = null
     private var pendingReferenceUpdateStudentId: String? = null
     private var currentStudentProfiles: List<StudentProfileData> = emptyList()
     private var authMode = AuthMode.LOGIN
@@ -365,6 +368,13 @@ class MainActivity : ComponentActivity() {
         val existingStudentId: String? = null
     )
 
+    private data class FaceReferenceReplacementContext(
+        val profile: StudentProfileData,
+        val referenceId: Long,
+        val mode: ProcessingMode,
+        val serverUrl: String?
+    )
+
     private data class AttendanceReportData(
         val course: String,
         val attendanceDate: String,
@@ -398,6 +408,19 @@ class MainActivity : ComponentActivity() {
             return@registerForActivityResult
         }
         updateFaceReferencesFromGallery(context, uris)
+    }
+
+    private val pickFaceReferenceReplacement = registerForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        val context = pendingReferenceReplacementContext
+        pendingReferenceReplacementContext = null
+        if (context == null) return@registerForActivityResult
+        if (uri == null) {
+            showStatus(getString(R.string.gallery_selection_cancelled))
+            return@registerForActivityResult
+        }
+        replaceFaceReferenceFromGallery(context, uri)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -2566,6 +2589,9 @@ class MainActivity : ComponentActivity() {
         val content = layoutInflater.inflate(R.layout.dialog_edit_student, null)
         val nameEditText = content.findViewById<EditText>(R.id.editStudentNameEditText)
         val sexSpinner = content.findViewById<Spinner>(R.id.editStudentSexSpinner)
+        val viewFacesButton = content.findViewById<Button>(
+            R.id.viewFaceReferencesButton
+        )
         val updateFacesButton = content.findViewById<Button>(
             R.id.updateFaceReferencesButton
         )
@@ -2591,6 +2617,10 @@ class MainActivity : ComponentActivity() {
             .setPositiveButton(R.string.save, null)
             .create()
         dialog.setOnShowListener {
+            viewFacesButton.setOnClickListener {
+                dialog.dismiss()
+                showFaceReferences(profile)
+            }
             updateFacesButton.setOnClickListener {
                 val name = nameEditText.text.toString().trim()
                 if (name.length < 2) {
@@ -2629,6 +2659,191 @@ class MainActivity : ComponentActivity() {
             }
         }
         dialog.show()
+    }
+
+    private fun showFaceReferences(profile: StudentProfileData) {
+        runNetworkRequest {
+            val references = localStore.faceReferences(profile.studentId)
+            runOnUiThread {
+                showFaceReferencesDialog(profile, references)
+            }
+        }
+    }
+
+    private fun showFaceReferencesDialog(
+        profile: StudentProfileData,
+        references: List<LocalFaceReference>
+    ) {
+        val content = layoutInflater.inflate(R.layout.dialog_face_references, null)
+        val summary = content.findViewById<TextView>(R.id.faceReferencesSummaryText)
+        val list = content.findViewById<LinearLayout>(R.id.faceReferencesList)
+        val empty = content.findViewById<TextView>(R.id.emptyFaceReferencesText)
+        summary.text = getString(R.string.face_references_summary, references.size)
+        empty.visibility = if (references.isEmpty()) View.VISIBLE else View.GONE
+        list.visibility = if (references.isEmpty()) View.GONE else View.VISIBLE
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.face_references_title, profile.name))
+            .setView(content)
+            .setPositiveButton(R.string.close, null)
+            .create()
+
+        references.forEachIndexed { index, reference ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(10), 0, dp(10))
+            }
+            val photo = ImageView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(92), dp(92))
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                contentDescription = getString(
+                    R.string.face_reference_photo_description,
+                    index + 1
+                )
+                decodeOrientedBitmap(reference.photoJpeg)?.let(::setImageBitmap)
+                setOnClickListener {
+                    showFaceReferencePreview(profile, reference, index + 1)
+                }
+            }
+            val details = LinearLayout(this).apply {
+                layoutParams = LinearLayout.LayoutParams(0, dp(92), 1f).apply {
+                    marginStart = dp(12)
+                }
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            details.addView(TextView(this).apply {
+                text = getString(R.string.face_reference_number, index + 1)
+                setTextColor(ContextCompat.getColor(context, R.color.text_primary))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            })
+            details.addView(TextView(this).apply {
+                text = getString(
+                    R.string.face_reference_date,
+                    java.text.DateFormat.getDateTimeInstance(
+                        java.text.DateFormat.SHORT,
+                        java.text.DateFormat.SHORT
+                    ).format(java.util.Date(reference.createdAt))
+                )
+                setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                maxLines = 2
+            })
+            val actions = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+            }
+            val selectable = TypedValue().also {
+                theme.resolveAttribute(
+                    android.R.attr.selectableItemBackgroundBorderless,
+                    it,
+                    true
+                )
+            }
+            actions.addView(ImageButton(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+                setImageResource(android.R.drawable.ic_menu_edit)
+                setBackgroundResource(selectable.resourceId)
+                contentDescription = getString(R.string.replace_face_reference)
+                tooltipText = getString(R.string.replace_face_reference)
+                setOnClickListener {
+                    dialog.dismiss()
+                    startFaceReferenceReplacement(profile, reference)
+                }
+            })
+            actions.addView(ImageButton(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+                setImageResource(android.R.drawable.ic_menu_delete)
+                setColorFilter(ContextCompat.getColor(context, R.color.danger))
+                setBackgroundResource(selectable.resourceId)
+                contentDescription = getString(R.string.delete_face_reference)
+                tooltipText = getString(R.string.delete_face_reference)
+                setOnClickListener {
+                    dialog.dismiss()
+                    confirmDeleteFaceReference(profile, reference)
+                }
+            })
+            row.addView(photo)
+            row.addView(details)
+            row.addView(actions)
+            list.addView(row)
+            if (index < references.lastIndex) {
+                list.addView(View(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(1)
+                    )
+                    setBackgroundColor(ContextCompat.getColor(context, R.color.border))
+                })
+            }
+        }
+        dialog.show()
+    }
+
+    private fun showFaceReferencePreview(
+        profile: StudentProfileData,
+        reference: LocalFaceReference,
+        position: Int
+    ) {
+        val image = ImageView(this).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            contentDescription = getString(
+                R.string.face_reference_photo_description,
+                position
+            )
+            decodeOrientedBitmap(reference.photoJpeg)?.let(::setImageBitmap)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(
+                getString(
+                    R.string.face_reference_preview_title,
+                    position,
+                    profile.name
+                )
+            )
+            .setView(image)
+            .setPositiveButton(R.string.close, null)
+            .show()
+    }
+
+    private fun startFaceReferenceReplacement(
+        profile: StudentProfileData,
+        reference: LocalFaceReference
+    ) {
+        val mode = selectedProcessingMode()
+        pendingReferenceReplacementContext = FaceReferenceReplacementContext(
+            profile = profile,
+            referenceId = reference.referenceId,
+            mode = mode,
+            serverUrl = if (mode == ProcessingMode.PHONE) null else serverUrlFor(mode)
+        )
+        pickFaceReferenceReplacement.launch(
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        )
+    }
+
+    private fun confirmDeleteFaceReference(
+        profile: StudentProfileData,
+        reference: LocalFaceReference
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.delete_face_reference_title)
+            .setMessage(getString(R.string.delete_face_reference_message, profile.name))
+            .setNegativeButton(R.string.cancel) { _, _ ->
+                showFaceReferences(profile)
+            }
+            .setPositiveButton(R.string.delete) { _, _ ->
+                deleteFaceReference(profile, reference)
+            }
+            .show()
     }
 
     private fun startFaceReferenceUpdate(studentId: String, name: String, sex: String) {
@@ -2827,6 +3042,151 @@ class MainActivity : ComponentActivity() {
                     if (processingUi.dialog.isShowing) processingUi.dialog.dismiss()
                 }
             }
+        }
+    }
+
+    private fun replaceFaceReferenceFromGallery(
+        context: FaceReferenceReplacementContext,
+        uri: Uri
+    ) {
+        if (!isNetworkBusy.compareAndSet(false, true)) {
+            showStatus(getString(R.string.network_busy))
+            return
+        }
+        setProcessing(true, getString(R.string.replace_face_reference_processing))
+        networkExecutor.execute {
+            try {
+                val bytes = readGalleryImage(uri)
+                val extraction = extractGalleryFaceReference(bytes) {}
+                if (extraction.samples.size != 1) {
+                    val message = if (extraction.samples.isEmpty()) {
+                        getString(R.string.saved_face_photo_no_face, 1)
+                    } else {
+                        getString(
+                            R.string.saved_face_photo_multiple_faces,
+                            1,
+                            extraction.samples.size
+                        )
+                    }
+                    throw IOException(message)
+                }
+                val replaced = localStore.replaceFaceReference(
+                    context.profile.studentId,
+                    context.referenceId,
+                    extraction.samples.single().embedding,
+                    bytes
+                )
+                if (!replaced) throw IOException(getString(R.string.face_reference_not_found))
+
+                val serverWarning = synchronizeFaceReferencesWithServer(
+                    context.profile,
+                    context.mode,
+                    context.serverUrl
+                )
+                val updatedProfile = refreshedLocalStudentProfile(context.profile)
+                val references = localStore.faceReferences(context.profile.studentId)
+                runOnUiThread {
+                    replaceCurrentStudentProfile(updatedProfile)
+                    renderStudentTable(currentStudentProfiles)
+                    showStatus(
+                        serverWarning?.let {
+                            getString(R.string.face_reference_server_warning, it)
+                        } ?: getString(
+                            R.string.face_reference_replaced,
+                            updatedProfile.name
+                        )
+                    )
+                    showFaceReferencesDialog(updatedProfile, references)
+                }
+            } catch (error: Exception) {
+                showStatus(networkErrorMessage(error))
+            } finally {
+                isNetworkBusy.set(false)
+                setProcessing(false)
+            }
+        }
+    }
+
+    private fun deleteFaceReference(
+        profile: StudentProfileData,
+        reference: LocalFaceReference
+    ) {
+        val mode = selectedProcessingMode()
+        val serverUrl = if (mode == ProcessingMode.PHONE) null else serverUrlFor(mode)
+        runNetworkRequest {
+            val remaining = localStore.deleteFaceReference(
+                profile.studentId,
+                reference.referenceId
+            ) ?: throw IOException(getString(R.string.face_reference_not_found))
+            val serverWarning = synchronizeFaceReferencesWithServer(profile, mode, serverUrl)
+            val updatedProfile = refreshedLocalStudentProfile(profile)
+            val references = localStore.faceReferences(profile.studentId)
+            runOnUiThread {
+                replaceCurrentStudentProfile(updatedProfile)
+                renderStudentTable(currentStudentProfiles)
+                showStatus(
+                    serverWarning?.let {
+                        getString(R.string.face_reference_server_warning, it)
+                    } ?: resources.getQuantityString(
+                        R.plurals.face_reference_deleted,
+                        remaining,
+                        remaining,
+                        updatedProfile.name
+                    )
+                )
+                showFaceReferencesDialog(updatedProfile, references)
+            }
+        }
+    }
+
+    private fun synchronizeFaceReferencesWithServer(
+        profile: StudentProfileData,
+        mode: ProcessingMode,
+        serverUrl: String?
+    ): String? {
+        if (mode == ProcessingMode.PHONE) return null
+        if (serverUrl == null) return getString(R.string.server_unreachable)
+        if (!runCatching { isHealthyServer(serverUrl) }.getOrDefault(false)) {
+            return getString(R.string.server_unreachable)
+        }
+        return runCatching {
+            val photos = localStore.facePhotosForServerUpload(profile.studentId)
+            if (photos.isEmpty()) {
+                val encodedId = URLEncoder.encode(
+                    profile.studentId,
+                    StandardCharsets.UTF_8.toString()
+                ).replace("+", "%20")
+                deleteJson("$serverUrl/students/$encodedId/recognition")
+            } else {
+                registerOnServer(
+                    serverUrl,
+                    profile.studentId,
+                    profile.name,
+                    profile.sex,
+                    photos,
+                    replace = true,
+                    allowExistingStudent = true
+                )
+            }
+        }.exceptionOrNull()?.message
+    }
+
+    private fun refreshedLocalStudentProfile(fallback: StudentProfileData): StudentProfileData {
+        val local = localStore.listStudents().firstOrNull {
+            it.studentId == fallback.studentId
+        } ?: return fallback
+        return StudentProfileData(
+            studentId = local.studentId,
+            name = local.name,
+            sex = local.sex,
+            embeddingCount = local.embeddingCount,
+            photoJpeg = local.photoJpeg
+        )
+    }
+
+    private fun replaceCurrentStudentProfile(updated: StudentProfileData) {
+        currentStudentProfiles = currentStudentProfiles.map { profile ->
+            if (profile.studentId == updated.studentId) updated else profile
         }
     }
 

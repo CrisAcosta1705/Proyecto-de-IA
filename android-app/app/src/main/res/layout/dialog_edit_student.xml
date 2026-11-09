@@ -55,10 +55,18 @@
         android:textStyle="bold" />
 
     <Button
-        android:id="@+id/updateFaceReferencesButton"
+        android:id="@+id/viewFaceReferencesButton"
         android:layout_width="match_parent"
         android:layout_height="52dp"
         android:layout_marginTop="8dp"
+        android:drawableStart="@android:drawable/ic_menu_gallery"
+        android:text="@string/view_face_references" />
+
+    <Button
+        android:id="@+id/updateFaceReferencesButton"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_marginTop="6dp"
         android:drawableStart="@android:drawable/ic_menu_camera"
         android:text="@string/update_face_references" />
 
