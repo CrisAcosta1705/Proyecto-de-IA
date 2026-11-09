@@ -130,10 +130,13 @@ US East, comprueba `/health` y monta un volumen persistente de 500 MB en
 4. Configura `ASISTENCIA_API_KEY` con una clave aleatoria de al menos 32
    caracteres mediante `railway variable set ASISTENCIA_API_KEY=CLAVE --service
    asistencia-api`. No agregues la clave al repositorio.
-5. Ejecuta `railway redeploy --service asistencia-api`.
-6. Genera el dominio HTTPS con `railway domain --service asistencia-api` y
+5. Genera una clave AES aleatoria de 32 bytes y configura su valor Base64 en
+   `ASISTENCIA_DATA_ENCRYPTION_KEY`. Guardala fuera de Git y del telefono:
+   perderla hace irrecuperables las fotos y embeddings del servidor.
+6. Ejecuta `railway redeploy --service asistencia-api`.
+7. Genera el dominio HTTPS con `railway domain --service asistencia-api` y
    comprueba que `https://DOMINIO/health` responda con `status: ok`.
-7. En GitHub, abre `Settings > Secrets and variables > Actions` y configura:
+8. En GitHub, abre `Settings > Secrets and variables > Actions` y configura:
 
 | Tipo | Nombre | Valor |
 | --- | --- | --- |
@@ -298,8 +301,11 @@ guardan fotografias, embeddings, identificadores, nombres y asistencias. Las
 fotografias de registro se pueden recuperar desde el servidor para regenerar
 embeddings locales. La app tambien permite subir manualmente al servidor los
 perfiles y referencias guardados en el telefono, pero las asistencias historicas
-no se sincronizan automaticamente. Android tiene deshabilitado el respaldo del
-sistema para evitar copiar biometria a la nube.
+no se sincronizan automaticamente. Android cifra cada fotografia y embedding
+con AES-256-GCM antes de escribirlo en SQLite. La clave se genera y conserva en
+Android Keystore, no dentro de la base. Las cuentas locales tambien se guardan
+en preferencias cifradas. El respaldo y la transferencia del sistema estan
+deshabilitados, y la app bloquea capturas y grabaciones de pantalla.
 
 El login administrativo es local al dispositivo. La contraseña no se guarda en
 texto plano: se conserva un hash PBKDF2 con sal aleatoria. Este acceso protege la
@@ -310,9 +316,20 @@ El APK incluye el modelo ligero `w600k_mbf.onnx` del paquete oficial
 `buffalo_sc`. Los modelos preentrenados de InsightFace son para investigacion no
 comercial; un uso comercial requiere una licencia separada.
 
-La API en Railway utiliza HTTPS y una clave enviada en `X-API-Key`, pero SQLite
-todavia no esta cifrada y el prototipo no detecta fotografias impresas o
-pantallas. Debe usarse con consentimiento. Antes de utilizarlo para decisiones
-oficiales es necesario validar el umbral con el dataset del proyecto, rotar la
-clave periodicamente y agregar cifrado y deteccion de suplantacion. La
-informacion biometrica y academica debe eliminarse cuando ya no sea necesaria.
+La API en Railway utiliza HTTPS y una clave enviada en `X-API-Key`. Las fotos y
+embeddings de SQLite se cifran con AES-256-GCM usando
+`ASISTENCIA_DATA_ENCRYPTION_KEY`; los datos anteriores se migran y compactan al
+arrancar. El contenedor aplica permisos privados, los endpoints biometricos
+envian cabeceras `no-store` y la documentacion publica se desactiva en
+produccion. La app rechaza servidores cuyo `/health` no confirme
+`storage_encrypted=true`.
+
+Para rotar la clave, conserva temporalmente la anterior en
+`ASISTENCIA_DATA_ENCRYPTION_KEY_PREVIOUS`, configura una nueva clave principal
+y despliega. El servidor vuelve a cifrar los BLOB con la nueva clave; despues
+de comprobar el servicio puede eliminarse la variable anterior. Nunca se deben
+versionar estas claves ni incluirlas en copias del documento.
+
+El prototipo todavia no detecta fotografias impresas o pantallas. Debe usarse
+con consentimiento, validar el umbral con el dataset real y eliminar la
+informacion biometrica y academica cuando ya no sea necesaria.

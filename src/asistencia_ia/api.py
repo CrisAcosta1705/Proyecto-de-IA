@@ -13,6 +13,7 @@ import uvicorn
 
 from asistencia_ia.discovery import DISCOVERY_PORT, DiscoveryResponder
 from asistencia_ia.recognition import InsightFaceExtractor
+from asistencia_ia.security import DataCipher
 from asistencia_ia.services.attendance import AttendanceService, FaceProcessingError
 from asistencia_ia.storage import AttendanceDatabase
 
@@ -49,6 +50,35 @@ def create_app(
     similarity_threshold: float | None = None,
     api_key: str | None = None,
 ) -> FastAPI:
+    is_production = bool(os.environ.get("RAILWAY_PROJECT_ID"))
+    configured_api_key = (
+        api_key if api_key is not None else os.environ.get("ASISTENCIA_API_KEY", "")
+    ).strip()
+    if is_production and not configured_api_key:
+        raise RuntimeError(
+            "ASISTENCIA_API_KEY debe estar configurada para ejecutar la API en Railway."
+        )
+    if is_production and len(configured_api_key) < 32:
+        raise RuntimeError("ASISTENCIA_API_KEY debe tener al menos 32 caracteres.")
+
+    encoded_data_key = os.environ.get("ASISTENCIA_DATA_ENCRYPTION_KEY", "").strip()
+    if is_production and not encoded_data_key:
+        raise RuntimeError(
+            "ASISTENCIA_DATA_ENCRYPTION_KEY debe estar configurada en Railway."
+        )
+    previous_data_keys = [
+        item.strip()
+        for item in os.environ.get(
+            "ASISTENCIA_DATA_ENCRYPTION_KEY_PREVIOUS",
+            "",
+        ).split(",")
+        if item.strip()
+    ]
+    data_cipher = (
+        DataCipher.from_base64(encoded_data_key, previous_data_keys)
+        if encoded_data_key
+        else None
+    )
     db_path = Path(
         database_path
         or os.environ.get("ASISTENCIA_DB", "data/processed/asistencia.db")
@@ -73,7 +103,7 @@ def create_app(
     second_reference_weight = float(
         os.environ.get("FACE_SECOND_REFERENCE_WEIGHT", "0.30")
     )
-    database = AttendanceDatabase(db_path)
+    database = AttendanceDatabase(db_path, data_cipher=data_cipher)
     database.initialize()
     detection_size = int(os.environ.get("INSIGHTFACE_DETECTION_SIZE", "640"))
     if not 320 <= detection_size <= 2048:
@@ -100,36 +130,53 @@ def create_app(
         minimum_reference_support,
         second_reference_weight,
     )
-    configured_api_key = (
-        api_key if api_key is not None else os.environ.get("ASISTENCIA_API_KEY", "")
-    ).strip()
-    if os.environ.get("RAILWAY_PROJECT_ID") and not configured_api_key:
-        raise RuntimeError(
-            "ASISTENCIA_API_KEY debe estar configurada para ejecutar la API en Railway."
-        )
-
     app = FastAPI(
         title="Asistencia estudiantil con IA",
-        version="0.7.0",
+        version="0.8.0",
         description="API para registro facial y asistencia sin duplicados.",
+        docs_url=None if is_production else "/docs",
+        redoc_url=None if is_production else "/redoc",
     )
     app.state.database = database
     app.state.extractor = face_extractor
     app.state.service = service
 
-    public_paths = {"/health", "/docs", "/openapi.json", "/redoc"}
+    public_paths = {"/health"}
+    if not is_production:
+        public_paths.update({"/docs", "/openapi.json", "/redoc"})
+
+    def add_security_headers(response: Response) -> Response:
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=()"
+        )
+        if is_production:
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; frame-ancestors 'none'"
+            )
+        return response
 
     @app.middleware("http")
     async def require_api_key(request: Request, call_next):
         if request.url.path in public_paths or not configured_api_key:
-            return await call_next(request)
-        received_api_key = request.headers.get("X-API-Key", "")
-        if not hmac.compare_digest(received_api_key, configured_api_key):
-            return JSONResponse(
+            return add_security_headers(await call_next(request))
+        received_api_key = request.headers.get("X-API-Key", "").strip()
+        if not received_api_key or not hmac.compare_digest(
+            received_api_key,
+            configured_api_key,
+        ):
+            return add_security_headers(JSONResponse(
                 status_code=401,
                 content={"detail": "La clave de acceso de la API no es valida."},
-            )
-        return await call_next(request)
+            ))
+        return add_security_headers(await call_next(request))
 
     def secured_openapi() -> dict[str, object]:
         if app.openapi_schema is not None:
@@ -160,7 +207,7 @@ def create_app(
         return {
             "status": "ok",
             "model_loaded": bool(getattr(face_extractor, "loaded", True)),
-            "database": str(db_path),
+            "storage_encrypted": data_cipher is not None,
         }
 
     @app.get("/students")

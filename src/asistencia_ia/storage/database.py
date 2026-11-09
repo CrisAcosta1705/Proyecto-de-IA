@@ -10,6 +10,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from asistencia_ia.recognition.matcher import normalize_embedding
+from asistencia_ia.security import DataCipher
 
 
 Embedding = NDArray[np.float32]
@@ -32,15 +33,20 @@ def _canonical_student_identity(value: str) -> str:
 class AttendanceDatabase:
     """Persistencia local de estudiantes, embeddings y asistencias."""
 
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, data_cipher: DataCipher | None = None):
         self.path = Path(path)
+        self.data_cipher = data_cipher
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._restrict_permissions(self.path.parent, 0o700)
         connection = sqlite3.connect(self.path, timeout=15)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA secure_delete = ON")
+        connection.execute("PRAGMA temp_store = MEMORY")
+        connection.execute("PRAGMA trusted_schema = OFF")
         try:
             yield connection
             connection.commit()
@@ -49,8 +55,100 @@ class AttendanceDatabase:
             raise
         finally:
             connection.close()
+            self._restrict_database_files()
+
+    @staticmethod
+    def _restrict_permissions(path: Path, mode: int) -> None:
+        try:
+            path.chmod(mode)
+        except (FileNotFoundError, PermissionError, OSError):
+            pass
+
+    def _restrict_database_files(self) -> None:
+        for suffix in ("", "-wal", "-shm"):
+            self._restrict_permissions(Path(f"{self.path}{suffix}"), 0o600)
+
+    @staticmethod
+    def _photo_aad(student_id: str) -> bytes:
+        return f"student-photo:v1:{student_id}".encode("utf-8")
+
+    @staticmethod
+    def _embedding_aad(student_id: str) -> bytes:
+        return f"face-embedding:v1:{student_id}".encode("utf-8")
+
+    def _encrypt_photo(self, student_id: str, photo: bytes) -> bytes:
+        if self.data_cipher is None:
+            return photo
+        return self.data_cipher.encrypt(photo, self._photo_aad(student_id))
+
+    def _decrypt_photo(self, student_id: str, photo: bytes) -> bytes:
+        if self.data_cipher is None:
+            return photo
+        return self.data_cipher.decrypt(photo, self._photo_aad(student_id))
+
+    def _encrypt_embedding(self, student_id: str, embedding: bytes) -> bytes:
+        if self.data_cipher is None:
+            return embedding
+        return self.data_cipher.encrypt(
+            embedding,
+            self._embedding_aad(student_id),
+        )
+
+    def _decrypt_embedding(self, student_id: str, embedding: bytes) -> bytes:
+        if self.data_cipher is None:
+            return embedding
+        return self.data_cipher.decrypt(
+            embedding,
+            self._embedding_aad(student_id),
+        )
+
+    def _migrate_sensitive_data(self, connection: sqlite3.Connection) -> bool:
+        if self.data_cipher is None:
+            return False
+        migrated = False
+        photos = connection.execute(
+            "SELECT student_id, photo FROM students WHERE photo IS NOT NULL"
+        ).fetchall()
+        for row in photos:
+            student_id = str(row["student_id"])
+            stored = bytes(row["photo"])
+            if not self.data_cipher.needs_reencryption(stored):
+                continue
+            plaintext = self._decrypt_photo(student_id, stored)
+            connection.execute(
+                "UPDATE students SET photo = ? WHERE student_id = ?",
+                (self._encrypt_photo(student_id, plaintext), student_id),
+            )
+            migrated = True
+
+        embeddings = connection.execute(
+            "SELECT id, student_id, embedding FROM face_embeddings"
+        ).fetchall()
+        for row in embeddings:
+            student_id = str(row["student_id"])
+            stored = bytes(row["embedding"])
+            if not self.data_cipher.needs_reencryption(stored):
+                continue
+            plaintext = self._decrypt_embedding(student_id, stored)
+            connection.execute(
+                "UPDATE face_embeddings SET embedding = ? WHERE id = ?",
+                (self._encrypt_embedding(student_id, plaintext), row["id"]),
+            )
+            migrated = True
+        return migrated
+
+    def _secure_compact(self) -> None:
+        connection = sqlite3.connect(self.path, timeout=15)
+        try:
+            connection.execute("PRAGMA secure_delete = ON")
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            connection.execute("VACUUM")
+        finally:
+            connection.close()
+            self._restrict_database_files()
 
     def initialize(self) -> None:
+        migrated_sensitive_data = False
         with self._connection() as connection:
             connection.executescript(
                 """
@@ -147,6 +245,9 @@ class AttendanceDatabase:
                 WHERE attendance_date = ''
                 """
             )
+            migrated_sensitive_data = self._migrate_sensitive_data(connection)
+        if migrated_sensitive_data:
+            self._secure_compact()
 
     def save_student(
         self,
@@ -188,7 +289,7 @@ class AttendanceDatabase:
                     student_id,
                     name,
                     sex,
-                    photo,
+                    self._encrypt_photo(student_id, photo) if photo else None,
                     photo_mime_type,
                     photo_sha256,
                     now,
@@ -209,7 +310,10 @@ class AttendanceDatabase:
                 [
                     (
                         student_id,
-                        vector.astype("<f4", copy=False).tobytes(),
+                        self._encrypt_embedding(
+                            student_id,
+                            vector.astype("<f4", copy=False).tobytes(),
+                        ),
                         vector.size,
                         now,
                     )
@@ -230,7 +334,11 @@ class AttendanceDatabase:
             ).fetchall()
 
         for row in rows:
-            vector = np.frombuffer(row["embedding"], dtype="<f4").copy()
+            embedding = self._decrypt_embedding(
+                str(row["student_id"]),
+                bytes(row["embedding"]),
+            )
+            vector = np.frombuffer(embedding, dtype="<f4").copy()
             if vector.size != row["dimension"]:
                 raise ValueError(
                     f"Embedding corrupto para el estudiante {row['student_id']}."
@@ -307,7 +415,8 @@ class AttendanceDatabase:
             ).fetchone()
         if row is None:
             return None
-        return bytes(row["photo"]), str(row["photo_mime_type"] or "image/jpeg")
+        photo = self._decrypt_photo(student_id, bytes(row["photo"]))
+        return photo, str(row["photo_mime_type"] or "image/jpeg")
 
     def update_student_sex(self, student_id: str, sex: str) -> str | None:
         with self._connection() as connection:

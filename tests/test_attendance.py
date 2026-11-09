@@ -307,7 +307,7 @@ class AttendanceServiceTest(unittest.TestCase):
         self.assertEqual(len(students.json()[0]["photo_sha256"]), 64)
         self.assertEqual(photo.status_code, 200)
         self.assertEqual(photo.headers["content-type"], "image/jpeg")
-        self.assertEqual(photo.headers["cache-control"], "no-store")
+        self.assertIn("no-store", photo.headers["cache-control"])
         self.assertEqual(photo.content, image)
 
     def test_api_key_protects_biometric_endpoints(self) -> None:
@@ -327,7 +327,10 @@ class AttendanceServiceTest(unittest.TestCase):
             )
 
         self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.headers["cache-control"], "no-store, max-age=0")
+        self.assertEqual(health.headers["x-content-type-options"], "nosniff")
         self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(unauthorized.headers["x-frame-options"], "DENY")
         self.assertEqual(authorized.status_code, 200)
 
     def test_railway_requires_api_key(self) -> None:
@@ -336,6 +339,25 @@ class AttendanceServiceTest(unittest.TestCase):
             {"RAILWAY_PROJECT_ID": "project-test", "ASISTENCIA_API_KEY": ""},
         ):
             with self.assertRaisesRegex(RuntimeError, "ASISTENCIA_API_KEY"):
+                create_app(
+                    database_path=self.database.path,
+                    extractor=self.extractor,
+                    similarity_threshold=0.8,
+                )
+
+    def test_railway_requires_data_encryption_key(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "RAILWAY_PROJECT_ID": "project-test",
+                "ASISTENCIA_API_KEY": "a" * 32,
+                "ASISTENCIA_DATA_ENCRYPTION_KEY": "",
+            },
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "ASISTENCIA_DATA_ENCRYPTION_KEY",
+            ):
                 create_app(
                     database_path=self.database.path,
                     extractor=self.extractor,

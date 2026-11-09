@@ -24,6 +24,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.ArrayAdapter
@@ -425,6 +426,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         setContentView(R.layout.activity_main)
         rootLayout = findViewById(R.id.rootLayout)
         appContent = findViewById(R.id.appContent)
@@ -4533,7 +4535,9 @@ class MainActivity : ComponentActivity() {
         return try {
             if (connection.responseCode !in 200..299) return false
             val body = connection.inputStream.bufferedReader().use { it.readText() }
-            JSONObject(body).optString("status") == "ok"
+            val health = JSONObject(body)
+            health.optString("status") == "ok" &&
+                health.optBoolean("storage_encrypted", false)
         } finally {
             connection.disconnect()
         }

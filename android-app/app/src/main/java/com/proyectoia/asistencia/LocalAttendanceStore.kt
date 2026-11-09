@@ -125,9 +125,12 @@ data class LocalRecognitionBatch(
 class LocalAttendanceStore(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
+    private val dataCipher = LocalDataCipher("asistencia_biometric_data_v1")
+
     companion object {
         private const val DATABASE_NAME = "asistencia_local.db"
-        private const val DATABASE_VERSION = 4
+        private const val DATABASE_VERSION = 5
+        private const val BIOMETRIC_CIPHER_VERSION = "1"
         private const val SIMILARITY_THRESHOLD = 0.50f
         private const val SINGLE_REFERENCE_THRESHOLD = 0.58f
         private const val MINIMUM_SCORE_MARGIN = 0.05f
@@ -141,6 +144,8 @@ class LocalAttendanceStore(context: Context) :
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
         db.setForeignKeyConstraintsEnabled(true)
+        db.execSQL("PRAGMA secure_delete = ON")
+        db.execSQL("PRAGMA temp_store = MEMORY")
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -196,6 +201,7 @@ class LocalAttendanceStore(context: Context) :
         )
         createServerImportsTable(db)
         createDeletedStudentsTable(db)
+        createSecurityMetadataTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -228,6 +234,14 @@ class LocalAttendanceStore(context: Context) :
         if (oldVersion < 4) {
             createDeletedStudentsTable(db)
         }
+        if (oldVersion < 5) {
+            createSecurityMetadataTable(db)
+        }
+    }
+
+    override fun onOpen(db: SQLiteDatabase) {
+        super.onOpen(db)
+        if (!db.isReadOnly) migrateSensitiveData(db)
     }
 
     fun registerStudent(
@@ -327,7 +341,7 @@ class LocalAttendanceStore(context: Context) :
             val updated = db.update(
                 "face_embeddings",
                 ContentValues().apply {
-                    put("embedding", encodeEmbedding(embedding))
+                    put("embedding", encodeEmbedding(embedding, reference.studentId))
                     put("model_id", LocalFaceRecognizer.MODEL_ID)
                 },
                 "id = ? AND student_id = ?",
@@ -532,8 +546,8 @@ class LocalAttendanceStore(context: Context) :
             val updated = db.update(
                 "face_embeddings",
                 ContentValues().apply {
-                    put("embedding", encodeEmbedding(embedding))
-                    put("photo_jpeg", storedPhoto)
+                    put("embedding", encodeEmbedding(embedding, cleanId))
+                    put("photo_jpeg", encryptPhoto(storedPhoto, cleanId))
                     put("model_id", LocalFaceRecognizer.MODEL_ID)
                     put("created_at", System.currentTimeMillis())
                 },
@@ -1059,7 +1073,7 @@ class LocalAttendanceStore(context: Context) :
                         RegisteredEmbedding(
                             cursor.getString(0),
                             cursor.getString(1),
-                            decodeEmbedding(cursor.getBlob(2))
+                            decodeEmbedding(cursor.getBlob(2), cursor.getString(0))
                         )
                     )
                 }
@@ -1123,8 +1137,8 @@ class LocalAttendanceStore(context: Context) :
             null,
             ContentValues().apply {
                 put("student_id", studentId)
-                put("embedding", encodeEmbedding(embedding))
-                put("photo_jpeg", storedPhoto)
+                put("embedding", encodeEmbedding(embedding, studentId))
+                put("photo_jpeg", encryptPhoto(storedPhoto, studentId))
                 put("model_id", LocalFaceRecognizer.MODEL_ID)
                 put("created_at", System.currentTimeMillis())
             }
@@ -1134,6 +1148,17 @@ class LocalAttendanceStore(context: Context) :
     }
 
     private fun readFacePhotoBlob(db: SQLiteDatabase, embeddingId: Long): ByteArray? {
+        val studentId = db.rawQuery(
+            "SELECT student_id FROM face_embeddings WHERE id = ? LIMIT 1",
+            arrayOf(embeddingId.toString())
+        ).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        } ?: return null
+        val stored = readRawFacePhotoBlob(db, embeddingId) ?: return null
+        return dataCipher.decrypt(stored, photoPurpose(studentId))
+    }
+
+    private fun readRawFacePhotoBlob(db: SQLiteDatabase, embeddingId: Long): ByteArray? {
         val statement = db.compileStatement(
             "SELECT photo_jpeg FROM face_embeddings WHERE id = ? LIMIT 1"
         )
@@ -1227,6 +1252,87 @@ class LocalAttendanceStore(context: Context) :
         }
     }
 
+    private fun embeddingPurpose(studentId: String): String =
+        "face-embedding:v1:$studentId"
+
+    private fun photoPurpose(studentId: String): String =
+        "student-photo:v1:$studentId"
+
+    private fun encryptPhoto(photo: ByteArray, studentId: String): ByteArray =
+        dataCipher.encrypt(photo, photoPurpose(studentId))
+
+    private fun createSecurityMetadataTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS security_metadata (
+                name TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
+    }
+
+    private fun migrateSensitiveData(db: SQLiteDatabase) {
+        createSecurityMetadataTable(db)
+        val currentVersion = db.rawQuery(
+            "SELECT value FROM security_metadata WHERE name = 'biometric_cipher_version'",
+            null
+        ).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+        if (currentVersion == BIOMETRIC_CIPHER_VERSION) return
+
+        val rows = db.rawQuery(
+            "SELECT id, student_id, embedding FROM face_embeddings ORDER BY id",
+            null
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(Triple(cursor.getLong(0), cursor.getString(1), cursor.getBlob(2)))
+                }
+            }
+        }
+        db.beginTransaction()
+        try {
+            rows.forEach { (embeddingId, studentId, storedEmbedding) ->
+                val values = ContentValues()
+                if (!dataCipher.isEncrypted(storedEmbedding)) {
+                    values.put(
+                        "embedding",
+                        dataCipher.encrypt(storedEmbedding, embeddingPurpose(studentId))
+                    )
+                }
+                val storedPhoto = readRawFacePhotoBlob(db, embeddingId)
+                if (storedPhoto != null && !dataCipher.isEncrypted(storedPhoto)) {
+                    values.put(
+                        "photo_jpeg",
+                        dataCipher.encrypt(storedPhoto, photoPurpose(studentId))
+                    )
+                }
+                if (values.size() > 0) {
+                    db.update(
+                        "face_embeddings",
+                        values,
+                        "id = ?",
+                        arrayOf(embeddingId.toString())
+                    )
+                }
+            }
+            db.insertWithOnConflict(
+                "security_metadata",
+                null,
+                ContentValues().apply {
+                    put("name", "biometric_cipher_version")
+                    put("value", BIOMETRIC_CIPHER_VERSION)
+                },
+                SQLiteDatabase.CONFLICT_REPLACE
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     private fun createServerImportsTable(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -1253,16 +1359,20 @@ class LocalAttendanceStore(context: Context) :
         )
     }
 
-    private fun encodeEmbedding(embedding: FloatArray): ByteArray {
+    private fun encodeEmbedding(embedding: FloatArray, studentId: String): ByteArray {
         val buffer = ByteBuffer.allocate(embedding.size * Float.SIZE_BYTES)
             .order(ByteOrder.LITTLE_ENDIAN)
         embedding.forEach(buffer::putFloat)
-        return buffer.array()
+        return dataCipher.encrypt(buffer.array(), embeddingPurpose(studentId))
     }
 
-    private fun decodeEmbedding(blob: ByteArray): FloatArray {
-        val buffer = ByteBuffer.wrap(blob).order(ByteOrder.LITTLE_ENDIAN)
-        return FloatArray(blob.size / Float.SIZE_BYTES) { buffer.float }
+    private fun decodeEmbedding(blob: ByteArray, studentId: String): FloatArray {
+        val plaintext = dataCipher.decrypt(blob, embeddingPurpose(studentId))
+        require(plaintext.size % Float.SIZE_BYTES == 0) {
+            "El embedding protegido tiene una longitud invalida."
+        }
+        val buffer = ByteBuffer.wrap(plaintext).order(ByteOrder.LITTLE_ENDIAN)
+        return FloatArray(plaintext.size / Float.SIZE_BYTES) { buffer.float }
     }
 
     private fun cosine(left: FloatArray, right: FloatArray): Float {

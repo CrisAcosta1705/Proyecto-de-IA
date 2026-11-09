@@ -11,6 +11,7 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         build-essential \
         cmake \
+        gosu \
         libgl1 \
         libglib2.0-0 \
         libgomp1 \
@@ -29,8 +30,6 @@ RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /var/data/models/insightface \
     && chown -R appuser:appuser /var/data
 
-USER appuser
-
 EXPOSE 10000
 
-CMD ["sh", "-c", "if [ \"$INSIGHTFACE_MODEL\" != \"buffalo_l\" ]; then rm -rf /var/data/models/insightface/models/buffalo_l /var/data/models/insightface/models/buffalo_l.zip; fi; exec uvicorn asistencia_ia.api:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1"]
+CMD ["sh", "-c", "umask 077; mkdir -p /var/data/models/insightface; chown -R appuser:appuser /var/data; if [ \"$INSIGHTFACE_MODEL\" != \"buffalo_l\" ]; then rm -rf /var/data/models/insightface/models/buffalo_l /var/data/models/insightface/models/buffalo_l.zip; fi; exec gosu appuser uvicorn asistencia_ia.api:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1"]

@@ -25,6 +25,8 @@ class LocalAuthStore(context: Context) {
     companion object {
         private const val PREFERENCES_NAME = "asistencia_auth"
         private const val USERS_KEY = "users_v2"
+        private const val USERS_ENCRYPTED_PREFIX = "AIAENC1:"
+        private const val USERS_ENCRYPTION_PURPOSE = "local-auth-users:v1"
         private const val CURRENT_USERNAME_KEY = "current_username"
         private const val SESSION_ACTIVE_KEY = "session_active"
 
@@ -52,9 +54,11 @@ class LocalAuthStore(context: Context) {
         PREFERENCES_NAME,
         Context.MODE_PRIVATE
     )
+    private val dataCipher = LocalDataCipher("asistencia_auth_data_v1")
 
     init {
         migrateLegacyAdministrator()
+        migrateUsersEncryption()
     }
 
     fun isConfigured(): Boolean = loadUsers().isNotEmpty()
@@ -249,7 +253,15 @@ class LocalAuthStore(context: Context) {
     }
 
     private fun loadUsers(): List<StoredUser> {
-        val serialized = preferences.getString(USERS_KEY, null) ?: return emptyList()
+        val stored = preferences.getString(USERS_KEY, null) ?: return emptyList()
+        val serialized = if (stored.startsWith(USERS_ENCRYPTED_PREFIX)) {
+            val envelope = decodeBase64(stored.removePrefix(USERS_ENCRYPTED_PREFIX))
+                ?: throw SecurityException("El almacenamiento de usuarios esta corrupto.")
+            dataCipher.decrypt(envelope, USERS_ENCRYPTION_PURPOSE)
+                .toString(Charsets.UTF_8)
+        } else {
+            stored
+        }
         return runCatching {
             val entries = JSONObject(serialized).optJSONArray("users") ?: JSONArray()
             buildList {
@@ -290,9 +302,24 @@ class LocalAuthStore(context: Context) {
                     .put("locked_until", user.lockedUntil)
             )
         }
+        val serialized = JSONObject().put("users", entries).toString()
+        val encrypted = dataCipher.encrypt(
+            serialized.toByteArray(Charsets.UTF_8),
+            USERS_ENCRYPTION_PURPOSE
+        )
         preferences.edit()
-            .putString(USERS_KEY, JSONObject().put("users", entries).toString())
+            .putString(
+                USERS_KEY,
+                USERS_ENCRYPTED_PREFIX + Base64.encodeToString(encrypted, Base64.NO_WRAP)
+            )
             .apply()
+    }
+
+    private fun migrateUsersEncryption() {
+        val stored = preferences.getString(USERS_KEY, null) ?: return
+        if (stored.startsWith(USERS_ENCRYPTED_PREFIX)) return
+        val users = loadUsers()
+        if (users.isNotEmpty()) saveUsers(users)
     }
 
     private fun sameUsername(first: String, second: String): Boolean {
