@@ -4,7 +4,6 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
-import java.security.SecureRandom
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -34,9 +33,12 @@ class LocalDataCipher(
     }
 
     fun encrypt(plaintext: ByteArray, purpose: String): ByteArray {
-        val nonce = ByteArray(NONCE_SIZE).also(SecureRandom()::nextBytes)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey(), GCMParameterSpec(TAG_BITS, nonce))
+        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
+        val nonce = cipher.iv
+        require(nonce.size == NONCE_SIZE) {
+            "Android Keystore genero un nonce GCM con longitud invalida."
+        }
         cipher.updateAAD(purpose.toByteArray(StandardCharsets.UTF_8))
         val ciphertext = cipher.doFinal(plaintext)
         return ENVELOPE_PREFIX + nonce + ciphertext
