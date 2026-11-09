@@ -78,7 +78,7 @@ class EmbeddingMatcherTest(unittest.TestCase):
             set(references),
         )
 
-    def test_batch_retries_second_candidate_after_best_identity_is_claimed(self) -> None:
+    def test_batch_does_not_reassign_duplicate_face_to_second_candidate(self) -> None:
         matcher = EmbeddingMatcher(
             {
                 "estudiante_001": [np.array([1.0, 0.0, 0.0])],
@@ -95,11 +95,44 @@ class EmbeddingMatcherTest(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(
-            [result.student_id for result in results],
-            ["estudiante_001", "estudiante_002"],
+        self.assertEqual(results[0].student_id, "estudiante_001")
+        self.assertTrue(results[0].accepted)
+        self.assertIsNone(results[1].student_id)
+        self.assertFalse(results[1].accepted)
+
+    def test_multiple_references_need_support_from_a_second_reference(self) -> None:
+        matcher = EmbeddingMatcher(
+            {
+                "estudiante_001": [
+                    np.array([1.0, 0.0, 0.0]),
+                    np.array([0.0, 1.0, 0.0]),
+                ],
+            },
+            threshold=0.5,
+            minimum_reference_support=0.4,
         )
-        self.assertTrue(all(result.accepted for result in results))
+
+        result = matcher.match([1.0, 0.0, 0.0])
+
+        self.assertFalse(result.accepted)
+        self.assertIsNone(result.student_id)
+
+    def test_multiple_consistent_references_are_accepted(self) -> None:
+        matcher = EmbeddingMatcher(
+            {
+                "estudiante_001": [
+                    np.array([1.0, 0.0, 0.0]),
+                    np.array([0.95, 0.31, 0.0]),
+                ],
+            },
+            threshold=0.5,
+            minimum_reference_support=0.4,
+        )
+
+        result = matcher.match([1.0, 0.0, 0.0])
+
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.student_id, "estudiante_001")
 
     def test_zero_embedding_is_invalid(self) -> None:
         with self.assertRaises(ValueError):

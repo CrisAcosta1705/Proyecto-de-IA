@@ -59,13 +59,19 @@ class AttendanceService:
         self,
         database: AttendanceDatabase,
         extractor: FaceEmbeddingExtractor,
-        similarity_threshold: float = 0.45,
-        minimum_score_margin: float = 0.025,
+        similarity_threshold: float = 0.50,
+        minimum_score_margin: float = 0.05,
+        single_reference_threshold: float | None = None,
+        minimum_reference_support: float = 0.38,
+        second_reference_weight: float = 0.30,
     ):
         self.database = database
         self.extractor = extractor
         self.similarity_threshold = similarity_threshold
         self.minimum_score_margin = minimum_score_margin
+        self.single_reference_threshold = single_reference_threshold
+        self.minimum_reference_support = minimum_reference_support
+        self.second_reference_weight = second_reference_weight
 
     def register_student(
         self,
@@ -198,6 +204,9 @@ class AttendanceService:
             references,
             self.similarity_threshold,
             self.minimum_score_margin,
+            self.single_reference_threshold,
+            self.minimum_reference_support,
+            self.second_reference_weight,
         )
         matches = matcher.match_batch([face.embedding for face in faces])
         recognized_in_frame: set[str] = set()

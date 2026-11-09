@@ -1322,8 +1322,8 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     } else if (activeSection == AppSection.ATTENDANCE) {
-                        countText.text = getString(R.string.people_count, faces.size)
                         if (!isShowingRecognitionResult.get()) {
+                            countText.text = getString(R.string.people_count, faces.size)
                             faceOverlay.setFaces(
                                 boxes,
                                 analyzedWidth,
@@ -4067,16 +4067,14 @@ class MainActivity : ComponentActivity() {
         local: LocalRecognitionBatch,
         server: JSONObject
     ): Boolean {
+        if (local.recognizedCount > 0) return true
         val serverFaces = server.optInt(
             "faces_detected",
             server.optJSONArray("faces")?.length() ?: 0
         )
         val serverRecognized = server.optInt("recognized_count", 0)
-        return local.recognizedCount > serverRecognized ||
-            (
-                local.recognizedCount == serverRecognized &&
-                    local.faces.size > serverFaces
-                )
+        if (serverRecognized > 0) return false
+        return local.faces.isNotEmpty() || serverFaces == 0
     }
 
     private fun extractLocalFaces(jpeg: ByteArray): LocalFaceExtraction {

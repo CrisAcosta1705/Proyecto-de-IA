@@ -56,10 +56,22 @@ def create_app(
     threshold = (
         similarity_threshold
         if similarity_threshold is not None
-        else float(os.environ.get("FACE_SIMILARITY_THRESHOLD", "0.45"))
+        else float(os.environ.get("FACE_SIMILARITY_THRESHOLD", "0.50"))
     )
     minimum_score_margin = float(
-        os.environ.get("FACE_MINIMUM_SCORE_MARGIN", "0.025")
+        os.environ.get("FACE_MINIMUM_SCORE_MARGIN", "0.05")
+    )
+    single_reference_threshold = float(
+        os.environ.get(
+            "FACE_SINGLE_REFERENCE_THRESHOLD",
+            str(max(threshold, 0.58)),
+        )
+    )
+    minimum_reference_support = float(
+        os.environ.get("FACE_MINIMUM_REFERENCE_SUPPORT", "0.38")
+    )
+    second_reference_weight = float(
+        os.environ.get("FACE_SECOND_REFERENCE_WEIGHT", "0.30")
     )
     database = AttendanceDatabase(db_path)
     database.initialize()
@@ -84,6 +96,9 @@ def create_app(
         face_extractor,
         threshold,
         minimum_score_margin,
+        single_reference_threshold,
+        minimum_reference_support,
+        second_reference_weight,
     )
     configured_api_key = (
         api_key if api_key is not None else os.environ.get("ASISTENCIA_API_KEY", "")

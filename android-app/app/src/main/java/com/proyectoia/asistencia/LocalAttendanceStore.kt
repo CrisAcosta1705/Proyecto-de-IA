@@ -128,8 +128,11 @@ class LocalAttendanceStore(context: Context) :
     companion object {
         private const val DATABASE_NAME = "asistencia_local.db"
         private const val DATABASE_VERSION = 4
-        private const val SIMILARITY_THRESHOLD = 0.45f
-        private const val MINIMUM_SCORE_MARGIN = 0.025f
+        private const val SIMILARITY_THRESHOLD = 0.50f
+        private const val SINGLE_REFERENCE_THRESHOLD = 0.58f
+        private const val MINIMUM_SCORE_MARGIN = 0.05f
+        private const val MINIMUM_REFERENCE_SUPPORT = 0.38f
+        private const val SECOND_REFERENCE_WEIGHT = 0.30f
         private const val MAX_EMBEDDINGS_PER_STUDENT = 5
         private const val THUMBNAIL_MAX_DIMENSION = 256
         private const val REFERENCE_MAX_DIMENSION = 1600
@@ -1027,7 +1030,7 @@ class LocalAttendanceStore(context: Context) :
                 RegisteredEmbedding(studentId, studentName, embedding)
             }
         val results = samples.map { sample ->
-            val scores = rankedScores(sample.embedding, registered, emptySet())
+            val scores = rankedScores(sample.embedding, registered)
             val accepted = acceptedScore(scores)
             LocalRecognitionFace(
                 Rect(sample.bounds),
@@ -1271,19 +1274,31 @@ class LocalAttendanceStore(context: Context) :
 
     private fun rankedScores(
         embedding: FloatArray,
-        registered: List<RegisteredEmbedding>,
-        excludedStudents: Set<String>
+        registered: List<RegisteredEmbedding>
     ): List<StudentScore> {
         return registered
             .asSequence()
-            .filterNot { it.studentId in excludedStudents }
             .groupBy { it.studentId }
             .map { (_, embeddings) ->
-                val best = embeddings.maxBy { cosine(embedding, it.embedding) }
+                val similarities = embeddings
+                    .map { cosine(embedding, it.embedding) }
+                    .sortedDescending()
+                val bestSimilarity = similarities.first()
+                val secondSimilarity = similarities.getOrNull(1)
+                val combinedSimilarity = if (secondSimilarity == null) {
+                    bestSimilarity
+                } else {
+                    bestSimilarity * (1f - SECOND_REFERENCE_WEIGHT) +
+                        secondSimilarity * SECOND_REFERENCE_WEIGHT
+                }
+                val identity = embeddings.first()
                 StudentScore(
-                    best.studentId,
-                    best.studentName,
-                    cosine(embedding, best.embedding)
+                    identity.studentId,
+                    identity.studentName,
+                    combinedSimilarity,
+                    similarities.size,
+                    secondSimilarity == null ||
+                        secondSimilarity >= MINIMUM_REFERENCE_SUPPORT
                 )
             }
             .sortedByDescending { it.similarity }
@@ -1294,7 +1309,14 @@ class LocalAttendanceStore(context: Context) :
         val second = scores.getOrNull(1)
         val hasMargin = second == null ||
             best.similarity - second.similarity >= MINIMUM_SCORE_MARGIN
-        return best.takeIf { it.similarity >= SIMILARITY_THRESHOLD && hasMargin }
+        val threshold = if (best.referenceCount == 1) {
+            SINGLE_REFERENCE_THRESHOLD
+        } else {
+            SIMILARITY_THRESHOLD
+        }
+        return best.takeIf {
+            it.similarity >= threshold && hasMargin && it.hasReferenceSupport
+        }
     }
 
     private fun recognitionPlan(
@@ -1302,23 +1324,17 @@ class LocalAttendanceStore(context: Context) :
         registered: List<RegisteredEmbedding>
     ): RecognitionPlan {
         val rankedBySample = samples.map { sample ->
-            rankedScores(sample.embedding, registered, emptySet())
+            rankedScores(sample.embedding, registered)
         }
+        val candidates = rankedBySample.mapIndexedNotNull { index, scores ->
+            acceptedScore(scores)?.let { index to it }
+        }.sortedByDescending { (_, score) -> score.similarity }
         val claimedStudents = mutableSetOf<String>()
         val acceptedBySample = MutableList<StudentScore?>(samples.size) { null }
-
-        val pendingSamples = rankedBySample.indices.toMutableSet()
-        while (pendingSamples.isNotEmpty()) {
-            val proposals = pendingSamples.mapNotNull { sampleIndex ->
-                val available = rankedBySample[sampleIndex]
-                    .filterNot { it.studentId in claimedStudents }
-                acceptedScore(available)?.let { sampleIndex to it }
+        candidates.forEach { (sampleIndex, score) ->
+            if (claimedStudents.add(score.studentId)) {
+                acceptedBySample[sampleIndex] = score
             }
-            val selected = proposals.maxByOrNull { it.second.similarity } ?: break
-            val (sampleIndex, score) = selected
-            claimedStudents += score.studentId
-            pendingSamples -= sampleIndex
-            acceptedBySample[sampleIndex] = score
         }
         return RecognitionPlan(rankedBySample, acceptedBySample)
     }
@@ -1340,7 +1356,9 @@ class LocalAttendanceStore(context: Context) :
     private data class StudentScore(
         val studentId: String,
         val studentName: String,
-        val similarity: Float
+        val similarity: Float,
+        val referenceCount: Int,
+        val hasReferenceSupport: Boolean
     )
 
     private data class RecognitionPlan(

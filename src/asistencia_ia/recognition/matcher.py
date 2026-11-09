@@ -31,6 +31,14 @@ class RecognitionMatch:
     accepted: bool
 
 
+@dataclass(frozen=True)
+class _StudentScore:
+    student_id: str
+    similarity: float
+    reference_count: int
+    has_reference_support: bool
+
+
 class EmbeddingMatcher:
     """Compara embeddings y evita repetir identidades en una misma imagen."""
 
@@ -38,15 +46,34 @@ class EmbeddingMatcher:
         self,
         references: Mapping[str, Sequence[ArrayLike]],
         threshold: float,
-        minimum_margin: float = 0.025,
+        minimum_margin: float = 0.05,
+        single_reference_threshold: float | None = None,
+        minimum_reference_support: float = 0.38,
+        second_reference_weight: float = 0.30,
     ):
         if not -1.0 <= threshold <= 1.0:
             raise ValueError("El umbral debe estar entre -1 y 1.")
         if not 0.0 <= minimum_margin <= 2.0:
             raise ValueError("El margen minimo debe estar entre 0 y 2.")
+        if (
+            single_reference_threshold is not None
+            and not -1.0 <= single_reference_threshold <= 1.0
+        ):
+            raise ValueError("El umbral para una referencia debe estar entre -1 y 1.")
+        if not -1.0 <= minimum_reference_support <= 1.0:
+            raise ValueError("El soporte minimo debe estar entre -1 y 1.")
+        if not 0.0 <= second_reference_weight <= 1.0:
+            raise ValueError("El peso de la segunda referencia debe estar entre 0 y 1.")
 
         self._threshold = threshold
         self._minimum_margin = minimum_margin
+        self._single_reference_threshold = (
+            threshold
+            if single_reference_threshold is None
+            else single_reference_threshold
+        )
+        self._minimum_reference_support = minimum_reference_support
+        self._second_reference_weight = second_reference_weight
         self._references = {
             student_id: tuple(normalize_embedding(item) for item in embeddings)
             for student_id, embeddings in references.items()
@@ -58,35 +85,26 @@ class EmbeddingMatcher:
         return self._match_from_scores(scores)
 
     def match_batch(self, queries: Sequence[ArrayLike]) -> list[RecognitionMatch]:
-        """Asigna identidades unicas y reevalua candidatos que ya fueron usados."""
+        """Conserva solo la mejor cara por identidad sin reasignar perdedores."""
         ranked_scores = [self._ranked_scores(query) for query in queries]
         results = [self._rejected_match(scores) for scores in ranked_scores]
-        pending_faces = set(range(len(ranked_scores)))
+        candidates: list[tuple[float, int, str]] = []
+
+        for face_index, scores in enumerate(ranked_scores):
+            candidate = self._match_from_scores(scores)
+            if candidate.accepted and candidate.student_id is not None:
+                candidates.append(
+                    (candidate.similarity, face_index, candidate.student_id)
+                )
+
         claimed_students: set[str] = set()
-
-        while pending_faces:
-            proposals: list[tuple[float, int, str]] = []
-            for face_index in pending_faces:
-                available_scores = [
-                    score
-                    for score in ranked_scores[face_index]
-                    if score[0] not in claimed_students
-                ]
-                candidate = self._match_from_scores(available_scores)
-                if candidate.accepted and candidate.student_id is not None:
-                    proposals.append(
-                        (candidate.similarity, face_index, candidate.student_id)
-                    )
-
-            if not proposals:
-                break
-
-            similarity, face_index, student_id = max(
-                proposals,
-                key=lambda item: (item[0], -item[1], item[2]),
-            )
+        for similarity, face_index, student_id in sorted(
+            candidates,
+            key=lambda item: (-item[0], item[1], item[2]),
+        ):
+            if student_id in claimed_students:
+                continue
             claimed_students.add(student_id)
-            pending_faces.remove(face_index)
             results[face_index] = RecognitionMatch(
                 student_id=student_id,
                 similarity=similarity,
@@ -95,44 +113,73 @@ class EmbeddingMatcher:
 
         return results
 
-    def _ranked_scores(self, query: ArrayLike) -> list[tuple[str, float]]:
+    def _ranked_scores(self, query: ArrayLike) -> list[_StudentScore]:
         query_vector = normalize_embedding(query)
-        scores = [
-            (
-                student_id,
-                max(
+        scores: list[_StudentScore] = []
+        for student_id, embeddings in self._references.items():
+            similarities = sorted(
+                (
                     cosine_similarity(query_vector, reference)
                     for reference in embeddings
                 ),
+                reverse=True,
             )
-            for student_id, embeddings in self._references.items()
-        ]
-        return sorted(scores, key=lambda item: item[1], reverse=True)
+            best_similarity = similarities[0]
+            second_similarity = similarities[1] if len(similarities) > 1 else None
+            combined_similarity = (
+                best_similarity
+                if second_similarity is None
+                else (
+                    best_similarity * (1.0 - self._second_reference_weight)
+                    + second_similarity * self._second_reference_weight
+                )
+            )
+            scores.append(
+                _StudentScore(
+                    student_id=student_id,
+                    similarity=combined_similarity,
+                    reference_count=len(similarities),
+                    has_reference_support=(
+                        second_similarity is None
+                        or second_similarity >= self._minimum_reference_support
+                    ),
+                )
+            )
+        return sorted(scores, key=lambda item: item.similarity, reverse=True)
 
     def _match_from_scores(
         self,
-        scores: Sequence[tuple[str, float]],
+        scores: Sequence[_StudentScore],
     ) -> RecognitionMatch:
         if not scores:
             return RecognitionMatch(None, -1.0, False)
 
-        best_student, best_similarity = scores[0]
-        second_similarity = scores[1][1] if len(scores) > 1 else -1.0
+        best = scores[0]
+        second_similarity = scores[1].similarity if len(scores) > 1 else -1.0
         has_margin = (
             len(scores) == 1
-            or best_similarity - second_similarity >= self._minimum_margin
+            or best.similarity - second_similarity >= self._minimum_margin
         )
-        accepted = best_similarity >= self._threshold and has_margin
+        threshold = (
+            self._single_reference_threshold
+            if best.reference_count == 1
+            else self._threshold
+        )
+        accepted = (
+            best.similarity >= threshold
+            and has_margin
+            and best.has_reference_support
+        )
         return RecognitionMatch(
-            student_id=best_student if accepted else None,
-            similarity=best_similarity,
+            student_id=best.student_id if accepted else None,
+            similarity=best.similarity,
             accepted=accepted,
         )
 
     @staticmethod
     def _rejected_match(
-        scores: Sequence[tuple[str, float]],
+        scores: Sequence[_StudentScore],
     ) -> RecognitionMatch:
-        similarity = scores[0][1] if scores else -1.0
+        similarity = scores[0].similarity if scores else -1.0
         return RecognitionMatch(None, similarity, False)
 

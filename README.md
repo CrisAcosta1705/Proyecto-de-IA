@@ -140,9 +140,13 @@ US East, comprueba `/health` y monta un volumen persistente de 500 MB en
 | Variable | `ASISTENCIA_API_URL` | URL HTTPS `*.up.railway.app` asignada por Railway |
 | Secreto | `ASISTENCIA_API_KEY` | La misma clave configurada en Railway |
 
-La API usa `FACE_SIMILARITY_THRESHOLD=0.45`,
-`FACE_MINIMUM_SCORE_MARGIN=0.025` e `INSIGHTFACE_DETECTION_SIZE=640` como
-valores predeterminados. El margen evita aceptar identidades ambiguas y el
+La API usa `FACE_SIMILARITY_THRESHOLD=0.50`,
+`FACE_SINGLE_REFERENCE_THRESHOLD=0.58`, `FACE_MINIMUM_SCORE_MARGIN=0.05`,
+`FACE_MINIMUM_REFERENCE_SUPPORT=0.38`, `FACE_SECOND_REFERENCE_WEIGHT=0.30` e
+`INSIGHTFACE_DETECTION_SIZE=640` como
+valores predeterminados. El margen evita aceptar identidades ambiguas; el
+soporte y el peso de la segunda referencia exigen corroboracion cuando el
+estudiante tiene varias fotos. El
 tamaño de detección conserva más detalle en fotografías grupales. Estos valores
 pueden configurarse como variables de Railway después de calibrarlos con las
 fotografías reales del proyecto.
