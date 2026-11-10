@@ -1,17 +1,26 @@
 from dataclasses import asdict, dataclass
 
 
-PROFILE_ID = "arcface_w600k_mbf_112x112_v3"
+PROFILE_ID = "arcface_w600k_r50_112x112_v1"
 MODEL_ID = PROFILE_ID
-MODEL_FILENAME = "w600k_mbf.onnx"
-MODEL_SHA256 = "9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f"
+MODEL_FILENAME = "w600k_r50.onnx"
+MODEL_SHA256 = "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43"
+DETECTOR_ID = "scrfd_det_10g_960"
 INPUT_SIZE = 112
 EMBEDDING_SIZE = 512
-SIMILARITY_THRESHOLD = 0.50
-SINGLE_REFERENCE_THRESHOLD = 0.58
-MINIMUM_SCORE_MARGIN = 0.05
-MINIMUM_REFERENCE_SUPPORT = 0.38
-SECOND_REFERENCE_WEIGHT = 0.30
+SIMILARITY_THRESHOLD = 0.48
+SINGLE_REFERENCE_THRESHOLD = 0.55
+MINIMUM_SCORE_MARGIN = 0.07
+MINIMUM_REFERENCE_SUPPORT = 0.30
+SECOND_REFERENCE_WEIGHT = 0.20
+
+MOBILE_PROFILE = {
+    "profile_id": "arcface_w600k_mbf_112x112_v3",
+    "model_sha256": "9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f",
+    "input_size": 112,
+    "embedding_size": 512,
+    "role": "offline_fallback",
+}
 
 
 @dataclass(frozen=True)
@@ -25,6 +34,8 @@ class RecognitionProfile:
     minimum_score_margin: float
     minimum_reference_support: float
     second_reference_weight: float
+    detector_id: str = DETECTOR_ID
+    role: str = "canonical_server"
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

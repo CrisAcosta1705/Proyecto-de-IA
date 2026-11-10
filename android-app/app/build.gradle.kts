@@ -33,8 +33,8 @@ android {
         applicationId = "com.proyectoia.asistencia"
         minSdk = 26
         targetSdk = 35
-        versionCode = ciVersionCode ?: 1
-        versionName = ciVersionName ?: "0.1.0"
+        versionCode = ciVersionCode ?: 50
+        versionName = ciVersionName ?: "0.4.0"
         buildConfigField("String", "API_BASE_URL", asistenciaApiUrl.asBuildConfigString())
         buildConfigField("String", "API_KEY", asistenciaApiKey.asBuildConfigString())
         ndk {

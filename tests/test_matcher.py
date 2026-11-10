@@ -2,7 +2,11 @@ import unittest
 
 import numpy as np
 
-from asistencia_ia.recognition.matcher import EmbeddingMatcher, cosine_similarity
+from asistencia_ia.recognition.matcher import (
+    EmbeddingMatcher,
+    ReferenceEmbedding,
+    cosine_similarity,
+)
 
 
 class EmbeddingMatcherTest(unittest.TestCase):
@@ -78,11 +82,34 @@ class EmbeddingMatcherTest(unittest.TestCase):
             set(references),
         )
 
-    def test_batch_does_not_reassign_duplicate_face_to_second_candidate(self) -> None:
+    def test_batch_uses_global_assignment_for_competing_faces(self) -> None:
         matcher = EmbeddingMatcher(
             {
                 "estudiante_001": [np.array([1.0, 0.0, 0.0])],
                 "estudiante_002": [np.array([0.8, 0.6, 0.0])],
+            },
+            threshold=0.7,
+            minimum_margin=0.0,
+        )
+
+        results = matcher.match_batch(
+            [
+                np.array([1.0, 0.0, 0.0]),
+                np.array([0.95, 0.312, 0.0]),
+            ]
+        )
+
+        self.assertEqual(results[0].student_id, "estudiante_001")
+        self.assertTrue(results[0].accepted)
+        self.assertEqual(results[1].student_id, "estudiante_002")
+        self.assertTrue(results[1].accepted)
+
+    def test_global_assignment_does_not_hide_an_ambiguous_face(self) -> None:
+        matcher = EmbeddingMatcher(
+            {
+                "estudiante_001": [np.array([1.0, 0.0, 0.0])],
+                "estudiante_002": [np.array([0.8, 0.6, 0.0])],
+                "estudiante_003": [np.array([0.79, 0.613, 0.0])],
             },
             threshold=0.7,
             minimum_margin=0.02,
@@ -95,10 +122,46 @@ class EmbeddingMatcherTest(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(results[0].student_id, "estudiante_001")
         self.assertTrue(results[0].accepted)
-        self.assertIsNone(results[1].student_id)
         self.assertFalse(results[1].accepted)
+
+    def test_mirror_variants_count_as_one_logical_capture(self) -> None:
+        matcher = EmbeddingMatcher(
+            {
+                "estudiante_001": [
+                    ReferenceEmbedding("capture-1", np.array([1.0, 0.0])),
+                    ReferenceEmbedding(
+                        "capture-1", np.array([0.99, 0.01]), "MIRRORED"
+                    ),
+                ]
+            },
+            threshold=0.5,
+            single_reference_threshold=0.8,
+        )
+
+        result = matcher.match([1.0, 0.0])
+
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.student_id, "estudiante_001")
+
+    def test_mirror_variants_do_not_fake_second_capture_support(self) -> None:
+        matcher = EmbeddingMatcher(
+            {
+                "estudiante_001": [
+                    ReferenceEmbedding("capture-1", np.array([1.0, 0.0, 0.0])),
+                    ReferenceEmbedding(
+                        "capture-1", np.array([0.0, 1.0, 0.0]), "MIRRORED"
+                    ),
+                    ReferenceEmbedding("capture-2", np.array([0.0, 0.0, 1.0])),
+                ]
+            },
+            threshold=0.5,
+            minimum_reference_support=0.4,
+        )
+
+        result = matcher.match([1.0, 0.0, 0.0])
+
+        self.assertFalse(result.accepted)
 
     def test_multiple_references_need_support_from_a_second_reference(self) -> None:
         matcher = EmbeddingMatcher(

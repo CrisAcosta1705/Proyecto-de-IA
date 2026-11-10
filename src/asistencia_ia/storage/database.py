@@ -1,19 +1,36 @@
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import hashlib
 from pathlib import Path
 from typing import Iterator
 import unicodedata
+import uuid
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from asistencia_ia.recognition.matcher import normalize_embedding
+from asistencia_ia.recognition.matcher import ReferenceEmbedding, normalize_embedding
+from asistencia_ia.recognition.profile import PROFILE_ID
 from asistencia_ia.security import DataCipher
 
 
 Embedding = NDArray[np.float32]
+LEGACY_PROFILE_ID = "arcface_w600k_mbf_112x112_v3"
+
+
+@dataclass(frozen=True)
+class FaceReferenceCapture:
+    original_embedding: ArrayLike
+    mirrored_embedding: ArrayLike
+    original_photo: bytes
+    mirrored_photo: bytes
+    capture_id: str = ""
+    photo_mime_type: str = "image/jpeg"
+    source_camera: str = "UNKNOWN"
+    pose: str = "UNSPECIFIED"
+    quality: float = 1.0
 
 
 def _utc_now() -> str:
@@ -135,6 +152,30 @@ class AttendanceDatabase:
                 (self._encrypt_embedding(student_id, plaintext), row["id"]),
             )
             migrated = True
+
+        capture_photos = connection.execute(
+            """
+            SELECT capture_id, student_id, original_photo, mirrored_photo
+            FROM face_reference_captures
+            """
+        ).fetchall()
+        for row in capture_photos:
+            student_id = str(row["student_id"])
+            updates: list[tuple[str, bytes]] = []
+            for column in ("original_photo", "mirrored_photo"):
+                value = row[column]
+                if value is None:
+                    continue
+                stored = bytes(value)
+                if self.data_cipher.needs_reencryption(stored):
+                    plaintext = self._decrypt_photo(student_id, stored)
+                    updates.append((column, self._encrypt_photo(student_id, plaintext)))
+            for column, value in updates:
+                connection.execute(
+                    f"UPDATE face_reference_captures SET {column} = ? WHERE capture_id = ?",
+                    (value, row["capture_id"]),
+                )
+                migrated = True
         return migrated
 
     def _secure_compact(self) -> None:
@@ -171,7 +212,37 @@ class AttendanceDatabase:
                     embedding BLOB NOT NULL,
                     dimension INTEGER NOT NULL,
                     created_at TEXT NOT NULL,
+                    capture_id TEXT,
+                    variant TEXT NOT NULL DEFAULT 'ORIGINAL',
+                    model_profile TEXT NOT NULL DEFAULT 'arcface_w600k_mbf_112x112_v3',
+                    active INTEGER NOT NULL DEFAULT 1,
+                    quality REAL,
+                    quarantine_reason TEXT,
                     FOREIGN KEY (student_id) REFERENCES students(student_id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS face_reference_captures (
+                    capture_id TEXT PRIMARY KEY,
+                    student_id TEXT NOT NULL,
+                    original_photo BLOB,
+                    mirrored_photo BLOB,
+                    photo_mime_type TEXT NOT NULL DEFAULT 'image/jpeg',
+                    source_camera TEXT NOT NULL DEFAULT 'UNKNOWN',
+                    pose TEXT NOT NULL DEFAULT 'UNSPECIFIED',
+                    quality REAL NOT NULL DEFAULT 1.0,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    quarantine_reason TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (student_id) REFERENCES students(student_id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS student_aliases (
+                    alias_student_id TEXT PRIMARY KEY,
+                    canonical_student_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (canonical_student_id) REFERENCES students(student_id)
                         ON DELETE CASCADE
                 );
 
@@ -215,6 +286,55 @@ class AttendanceDatabase:
             for column, statement in student_migrations.items():
                 if column not in student_columns:
                     connection.execute(statement)
+
+            embedding_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(face_embeddings)"
+                ).fetchall()
+            }
+            embedding_migrations = {
+                "capture_id": "ALTER TABLE face_embeddings ADD COLUMN capture_id TEXT",
+                "variant": (
+                    "ALTER TABLE face_embeddings ADD COLUMN variant TEXT NOT NULL "
+                    "DEFAULT 'ORIGINAL'"
+                ),
+                "model_profile": (
+                    "ALTER TABLE face_embeddings ADD COLUMN model_profile TEXT NOT NULL "
+                    f"DEFAULT '{LEGACY_PROFILE_ID}'"
+                ),
+                "active": (
+                    "ALTER TABLE face_embeddings ADD COLUMN active INTEGER NOT NULL "
+                    "DEFAULT 1"
+                ),
+                "quality": "ALTER TABLE face_embeddings ADD COLUMN quality REAL",
+                "quarantine_reason": (
+                    "ALTER TABLE face_embeddings ADD COLUMN quarantine_reason TEXT"
+                ),
+            }
+            for column, statement in embedding_migrations.items():
+                if column not in embedding_columns:
+                    connection.execute(statement)
+            connection.execute(
+                """
+                UPDATE face_embeddings
+                SET capture_id = 'legacy-' || id
+                WHERE capture_id IS NULL OR capture_id = ''
+                """
+            )
+            if PROFILE_ID != LEGACY_PROFILE_ID:
+                connection.execute(
+                    """
+                    UPDATE face_embeddings
+                    SET active = 0
+                    WHERE model_profile = ?
+                    """,
+                    (LEGACY_PROFILE_ID,),
+                )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_face_embeddings_profile "
+                "ON face_embeddings(model_profile, active, student_id)"
+            )
 
             session_columns = {
                 row["name"]
@@ -298,14 +418,16 @@ class AttendanceDatabase:
             )
             if replace_embeddings:
                 connection.execute(
-                    "DELETE FROM face_embeddings WHERE student_id = ?",
-                    (student_id,),
+                    "DELETE FROM face_embeddings "
+                    "WHERE student_id = ? AND model_profile = ?",
+                    (student_id, PROFILE_ID),
                 )
             connection.executemany(
                 """
                 INSERT INTO face_embeddings(
-                    student_id, embedding, dimension, created_at
-                ) VALUES (?, ?, ?, ?)
+                    student_id, embedding, dimension, created_at, capture_id,
+                    variant, model_profile, active, quality
+                ) VALUES (?, ?, ?, ?, ?, 'ORIGINAL', ?, 1, 1.0)
                 """,
                 [
                     (
@@ -316,21 +438,163 @@ class AttendanceDatabase:
                         ),
                         vector.size,
                         now,
+                        f"legacy-api-{uuid.uuid4().hex}",
+                        PROFILE_ID,
                     )
                     for vector in normalized
                 ],
             )
         return len(normalized)
 
-    def references(self) -> dict[str, list[Embedding]]:
+    def save_student_captures(
+        self,
+        student_id: str,
+        name: str,
+        captures: list[FaceReferenceCapture],
+        replace_embeddings: bool = True,
+        sex: str = "NO_ESPECIFICADO",
+    ) -> int:
+        if not captures:
+            raise ValueError("Se requiere al menos una captura facial.")
+        now = _utc_now()
+        first_photo = captures[0].original_photo
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO students(
+                    student_id, name, sex, photo, photo_mime_type, photo_sha256,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(student_id) DO UPDATE SET
+                    name = excluded.name,
+                    sex = excluded.sex,
+                    photo = excluded.photo,
+                    photo_mime_type = excluded.photo_mime_type,
+                    photo_sha256 = excluded.photo_sha256,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    student_id,
+                    name,
+                    sex,
+                    self._encrypt_photo(student_id, first_photo),
+                    captures[0].photo_mime_type,
+                    hashlib.sha256(first_photo).hexdigest(),
+                    now,
+                    now,
+                ),
+            )
+            if replace_embeddings:
+                old_capture_ids = [
+                    str(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT DISTINCT capture_id FROM face_embeddings
+                        WHERE student_id = ? AND model_profile = ?
+                        """,
+                        (student_id, PROFILE_ID),
+                    ).fetchall()
+                    if row[0]
+                ]
+                connection.execute(
+                    "DELETE FROM face_embeddings "
+                    "WHERE student_id = ? AND model_profile = ?",
+                    (student_id, PROFILE_ID),
+                )
+                connection.executemany(
+                    """
+                    DELETE FROM face_reference_captures
+                    WHERE capture_id = ?
+                      AND NOT EXISTS(
+                          SELECT 1 FROM face_embeddings
+                          WHERE face_embeddings.capture_id =
+                                face_reference_captures.capture_id
+                      )
+                    """,
+                    [(capture_id,) for capture_id in old_capture_ids],
+                )
+
+            for capture in captures:
+                capture_id = capture.capture_id.strip() or uuid.uuid4().hex
+                owner = connection.execute(
+                    """
+                    SELECT student_id FROM face_reference_captures
+                    WHERE capture_id = ?
+                    """,
+                    (capture_id,),
+                ).fetchone()
+                if owner is not None and str(owner["student_id"]) != student_id:
+                    raise ValueError(
+                        "El identificador de la captura pertenece a otro estudiante."
+                    )
+                original = normalize_embedding(capture.original_embedding)
+                mirrored = normalize_embedding(capture.mirrored_embedding)
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO face_reference_captures(
+                        capture_id, student_id, original_photo, mirrored_photo,
+                        photo_mime_type, source_camera, pose, quality, active,
+                        quarantine_reason, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?)
+                    """,
+                    (
+                        capture_id,
+                        student_id,
+                        self._encrypt_photo(student_id, capture.original_photo),
+                        self._encrypt_photo(student_id, capture.mirrored_photo),
+                        capture.photo_mime_type,
+                        capture.source_camera.upper(),
+                        capture.pose.upper(),
+                        float(capture.quality),
+                        now,
+                    ),
+                )
+                for variant, vector in (
+                    ("ORIGINAL", original),
+                    ("MIRRORED", mirrored),
+                ):
+                    connection.execute(
+                        """
+                        INSERT INTO face_embeddings(
+                            student_id, embedding, dimension, created_at,
+                            capture_id, variant, model_profile, active, quality
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                        """,
+                        (
+                            student_id,
+                            self._encrypt_embedding(
+                                student_id,
+                                vector.astype("<f4", copy=False).tobytes(),
+                            ),
+                            vector.size,
+                            now,
+                            capture_id,
+                            variant,
+                            PROFILE_ID,
+                            float(capture.quality),
+                        ),
+                    )
+        return len(captures)
+
+    def references(
+        self,
+        model_profile: str | None = None,
+    ) -> dict[str, list[Embedding]]:
         references: dict[str, list[Embedding]] = {}
         with self._connection() as connection:
-            rows = connection.execute(
-                """
+            query = """
                 SELECT student_id, embedding, dimension
                 FROM face_embeddings
-                ORDER BY student_id, id
-                """
+                WHERE active = 1
+            """
+            parameters: tuple[object, ...] = ()
+            if model_profile is not None:
+                query += " AND model_profile = ?"
+                parameters = (model_profile,)
+            query += " ORDER BY student_id, id"
+            rows = connection.execute(
+                query,
+                parameters,
             ).fetchall()
 
         for row in rows:
@@ -344,6 +608,38 @@ class AttendanceDatabase:
                     f"Embedding corrupto para el estudiante {row['student_id']}."
                 )
             references.setdefault(row["student_id"], []).append(vector)
+        return references
+
+    def reference_records(
+        self,
+        model_profile: str = PROFILE_ID,
+    ) -> dict[str, list[ReferenceEmbedding]]:
+        references: dict[str, list[ReferenceEmbedding]] = {}
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT student_id, capture_id, variant, embedding, dimension
+                FROM face_embeddings
+                WHERE model_profile = ? AND active = 1
+                ORDER BY student_id, capture_id, variant
+                """,
+                (model_profile,),
+            ).fetchall()
+        for row in rows:
+            student_id = str(row["student_id"])
+            plaintext = self._decrypt_embedding(student_id, bytes(row["embedding"]))
+            vector = np.frombuffer(plaintext, dtype="<f4").copy()
+            if vector.size != row["dimension"]:
+                raise ValueError(
+                    f"Embedding corrupto para el estudiante {student_id}."
+                )
+            references.setdefault(student_id, []).append(
+                ReferenceEmbedding(
+                    capture_id=str(row["capture_id"]),
+                    embedding=vector,
+                    variant=str(row["variant"]),
+                )
+            )
         return references
 
     def student_names(self) -> dict[str, str]:
@@ -360,12 +656,17 @@ class AttendanceDatabase:
                 SELECT s.student_id, s.name, s.sex, s.created_at, s.updated_at,
                        CASE WHEN s.photo IS NULL THEN 0 ELSE 1 END AS has_photo,
                        s.photo_sha256,
-                       COUNT(e.id) AS embedding_count
+                       COUNT(DISTINCT CASE WHEN e.active = 1 THEN e.capture_id END)
+                           AS embedding_count
                 FROM students AS s
-                LEFT JOIN face_embeddings AS e ON e.student_id = s.student_id
+                LEFT JOIN face_embeddings AS e
+                    ON e.student_id = s.student_id
+                   AND e.active = 1
+                   AND e.model_profile = ?
                 GROUP BY s.student_id
                 ORDER BY s.name COLLATE NOCASE, s.student_id
-                """
+                """,
+                (PROFILE_ID,),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -469,6 +770,10 @@ class AttendanceDatabase:
                 (student_id,),
             )
             connection.execute(
+                "DELETE FROM face_reference_captures WHERE student_id = ?",
+                (student_id,),
+            )
+            connection.execute(
                 """
                 UPDATE students
                 SET photo = NULL,
@@ -504,13 +809,205 @@ class AttendanceDatabase:
         with self._connection() as connection:
             row = connection.execute(
                 """
-                SELECT COUNT(*) AS count
+                SELECT COUNT(DISTINCT capture_id) AS count
                 FROM face_embeddings
-                WHERE student_id = ?
+                WHERE student_id = ? AND active = 1 AND model_profile = ?
                 """,
-                (student_id,),
+                (student_id, PROFILE_ID),
             ).fetchone()
         return int(row["count"])
+
+    def list_reference_captures(
+        self,
+        student_id: str,
+        include_inactive: bool = True,
+    ) -> list[dict[str, object]]:
+        where_active = "" if include_inactive else " AND c.active = 1"
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT c.capture_id, c.student_id, c.photo_mime_type,
+                       c.source_camera, c.pose, c.quality, c.active,
+                       c.quarantine_reason, c.created_at,
+                       COUNT(e.id) AS variant_count
+                FROM face_reference_captures AS c
+                LEFT JOIN face_embeddings AS e
+                    ON e.capture_id = c.capture_id
+                   AND e.model_profile = ?
+                WHERE c.student_id = ?{where_active}
+                GROUP BY c.capture_id
+                ORDER BY c.created_at, c.capture_id
+                """,
+                (PROFILE_ID, student_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def reference_photo(
+        self,
+        student_id: str,
+        capture_id: str,
+        variant: str,
+    ) -> tuple[bytes, str] | None:
+        column = "mirrored_photo" if variant.upper() == "MIRRORED" else "original_photo"
+        with self._connection() as connection:
+            row = connection.execute(
+                f"""
+                SELECT {column} AS photo, photo_mime_type
+                FROM face_reference_captures
+                WHERE student_id = ? AND capture_id = ?
+                """,
+                (student_id, capture_id),
+            ).fetchone()
+        if row is None or row["photo"] is None:
+            return None
+        return (
+            self._decrypt_photo(student_id, bytes(row["photo"])),
+            str(row["photo_mime_type"] or "image/jpeg"),
+        )
+
+    def quarantine_capture(self, capture_id: str, reason: str) -> bool:
+        with self._connection() as connection:
+            updated = connection.execute(
+                """
+                UPDATE face_reference_captures
+                SET active = 0, quarantine_reason = ?
+                WHERE capture_id = ?
+                """,
+                (reason, capture_id),
+            ).rowcount
+            connection.execute(
+                """
+                UPDATE face_embeddings
+                SET active = 0, quarantine_reason = ?
+                WHERE capture_id = ?
+                """,
+                (reason, capture_id),
+            )
+        return updated > 0
+
+    def restore_capture(self, capture_id: str) -> bool:
+        with self._connection() as connection:
+            updated = connection.execute(
+                """
+                UPDATE face_reference_captures
+                SET active = 1, quarantine_reason = NULL
+                WHERE capture_id = ?
+                """,
+                (capture_id,),
+            ).rowcount
+            connection.execute(
+                """
+                UPDATE face_embeddings
+                SET active = 1, quarantine_reason = NULL
+                WHERE capture_id = ?
+                """,
+                (capture_id,),
+            )
+        return updated > 0
+
+    def merge_students(self, source_id: str, canonical_id: str) -> bool:
+        """Fusiona una identidad duplicada sin perder asistencias ni biometricos."""
+        if source_id == canonical_id:
+            return False
+        with self._connection() as connection:
+            source = connection.execute(
+                "SELECT 1 FROM students WHERE student_id = ?",
+                (source_id,),
+            ).fetchone()
+            target = connection.execute(
+                "SELECT 1 FROM students WHERE student_id = ?",
+                (canonical_id,),
+            ).fetchone()
+            if source is None or target is None:
+                return False
+            rows = connection.execute(
+                """
+                SELECT session_id, similarity, recorded_at
+                FROM attendance_records WHERE student_id = ?
+                """,
+                (source_id,),
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    """
+                    INSERT INTO attendance_records(
+                        session_id, student_id, similarity, recorded_at
+                    ) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(session_id, student_id) DO UPDATE SET
+                        similarity = MAX(similarity, excluded.similarity)
+                    """,
+                    (
+                        row["session_id"],
+                        canonical_id,
+                        row["similarity"],
+                        row["recorded_at"],
+                    ),
+                )
+            connection.execute(
+                "DELETE FROM attendance_records WHERE student_id = ?",
+                (source_id,),
+            )
+            source_embeddings = connection.execute(
+                "SELECT id, embedding FROM face_embeddings WHERE student_id = ?",
+                (source_id,),
+            ).fetchall()
+            for row in source_embeddings:
+                plaintext = self._decrypt_embedding(
+                    source_id,
+                    bytes(row["embedding"]),
+                )
+                connection.execute(
+                    "UPDATE face_embeddings SET embedding = ? WHERE id = ?",
+                    (self._encrypt_embedding(canonical_id, plaintext), row["id"]),
+                )
+            source_captures = connection.execute(
+                """
+                SELECT capture_id, original_photo, mirrored_photo
+                FROM face_reference_captures WHERE student_id = ?
+                """,
+                (source_id,),
+            ).fetchall()
+            for row in source_captures:
+                values: list[bytes | None] = []
+                for column in ("original_photo", "mirrored_photo"):
+                    stored = row[column]
+                    values.append(
+                        None
+                        if stored is None
+                        else self._encrypt_photo(
+                            canonical_id,
+                            self._decrypt_photo(source_id, bytes(stored)),
+                        )
+                    )
+                connection.execute(
+                    """
+                    UPDATE face_reference_captures
+                    SET original_photo = ?, mirrored_photo = ?
+                    WHERE capture_id = ?
+                    """,
+                    (values[0], values[1], row["capture_id"]),
+                )
+            connection.execute(
+                "UPDATE face_embeddings SET student_id = ? WHERE student_id = ?",
+                (canonical_id, source_id),
+            )
+            connection.execute(
+                "UPDATE face_reference_captures SET student_id = ? WHERE student_id = ?",
+                (canonical_id, source_id),
+            )
+            connection.execute(
+                "DELETE FROM students WHERE student_id = ?",
+                (source_id,),
+            )
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO student_aliases(
+                    alias_student_id, canonical_student_id, created_at
+                ) VALUES (?, ?, ?)
+                """,
+                (source_id, canonical_id, _utc_now()),
+            )
+        return True
 
     def attendance_status(
         self,

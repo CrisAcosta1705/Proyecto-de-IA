@@ -89,7 +89,7 @@ class InsightFaceExtractor:
         digest = hashlib.sha256(model_path.read_bytes()).hexdigest()
         if digest != self.expected_model_sha256:
             raise RuntimeError(
-                "El modelo facial del servidor no coincide con el modelo de Android."
+                "El modelo facial no coincide con el perfil de reconocimiento."
             )
         import onnxruntime as ort
 
@@ -114,10 +114,12 @@ class InsightFaceExtractor:
                 height,
             )
             supplemental_faces: list[ExtractedFace] = []
-            if width >= 800 and width / height >= 1.35:
-                tile_width = max(height, int(width * 0.65))
-                tile_width = min(tile_width, width)
-                for x_offset in sorted({0, width - tile_width}):
+            if width >= 800 and width / height >= 1.25:
+                tile_width = min(width, max(height, int(width * 0.58)))
+                step = max(1, int(tile_width * 0.68))
+                offsets = list(range(0, max(1, width - tile_width + 1), step))
+                offsets.append(width - tile_width)
+                for x_offset in sorted(set(offsets)):
                     tile = image[:, x_offset : x_offset + tile_width]
                     supplemental_faces.extend(
                         self._convert_faces(
@@ -131,6 +133,15 @@ class InsightFaceExtractor:
 
         return self._merge_supplemental_faces(primary_faces, supplemental_faces)
 
+    def extract_reference_variants(
+        self,
+        image: NDArray[np.uint8],
+    ) -> tuple[list[ExtractedFace], list[ExtractedFace]]:
+        """Extrae la captura y su reflejo con el mismo motor y perfil."""
+        original = self.extract(image)
+        mirrored = self.extract(cv2.flip(image, 1))
+        return original, mirrored
+
     def _convert_faces(
         self,
         faces,
@@ -138,6 +149,7 @@ class InsightFaceExtractor:
         image_width: int,
         image_height: int,
         x_offset: int = 0,
+        y_offset: int = 0,
     ) -> list[ExtractedFace]:
         extracted: list[ExtractedFace] = []
 
@@ -147,9 +159,9 @@ class InsightFaceExtractor:
                 continue
             x1, y1, x2, y2 = face.bbox.astype(int).tolist()
             x1 = max(0, min(x1 + x_offset, image_width - 1))
-            y1 = max(0, min(y1, image_height - 1))
+            y1 = max(0, min(y1 + y_offset, image_height - 1))
             x2 = max(x1 + 1, min(x2 + x_offset, image_width))
-            y2 = max(y1 + 1, min(y2, image_height))
+            y2 = max(y1 + 1, min(y2 + y_offset, image_height))
             extracted.append(
                 ExtractedFace(
                     box=BoundingBox(x1, y1, x2, y2),
@@ -189,7 +201,7 @@ class InsightFaceExtractor:
             reverse=True,
         ):
             if any(
-                cls._overlap_over_smaller(candidate.box, kept.box) >= 0.55
+                cls._faces_are_duplicates(candidate, kept)
                 for kept in accepted
             ):
                 continue
@@ -209,12 +221,24 @@ class InsightFaceExtractor:
             reverse=True,
         ):
             if any(
-                cls._overlap_over_smaller(candidate.box, kept.box) >= 0.55
+                cls._faces_are_duplicates(candidate, kept)
                 for kept in accepted
             ):
                 continue
             accepted.append(candidate)
         return sorted(accepted, key=lambda item: (item.box.x1, item.box.y1))
+
+    @classmethod
+    def _faces_are_duplicates(
+        cls,
+        first: ExtractedFace,
+        second: ExtractedFace,
+    ) -> bool:
+        overlap = cls._overlap_over_smaller(first.box, second.box)
+        if overlap >= 0.55:
+            return True
+        similarity = float(np.dot(first.embedding, second.embedding))
+        return overlap >= 0.25 and similarity >= 0.95
 
     @staticmethod
     def _overlap_over_smaller(first: BoundingBox, second: BoundingBox) -> float:

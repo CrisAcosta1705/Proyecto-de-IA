@@ -17,6 +17,7 @@ import java.nio.ByteOrder
 import java.text.Normalizer
 import java.time.LocalDate
 import java.util.Locale
+import java.util.UUID
 
 const val SEX_MALE = "MASCULINO"
 const val SEX_FEMALE = "FEMENINO"
@@ -60,6 +61,7 @@ data class LocalStudentServerUpload(
 data class LegacyFaceReference(
     val embeddingId: Long,
     val studentId: String,
+    val captureId: String,
     val photoJpeg: ByteArray
 )
 
@@ -67,7 +69,19 @@ data class LocalFaceReference(
     val referenceId: Long,
     val studentId: String,
     val photoJpeg: ByteArray,
+    val mirroredPhotoJpeg: ByteArray?,
     val createdAt: Long
+)
+
+data class LocalReferenceCapture(
+    val originalEmbedding: FloatArray,
+    val mirroredEmbedding: FloatArray,
+    val originalPhotoJpeg: ByteArray,
+    val mirroredPhotoJpeg: ByteArray,
+    val captureId: String = UUID.randomUUID().toString(),
+    val sourceCamera: String = "UNKNOWN",
+    val pose: String = "UNSPECIFIED",
+    val quality: Float = 1f
 )
 
 data class LocalAttendanceSummary(
@@ -129,7 +143,7 @@ class LocalAttendanceStore(context: Context) :
 
     companion object {
         private const val DATABASE_NAME = "asistencia_local.db"
-        private const val DATABASE_VERSION = 5
+        private const val DATABASE_VERSION = 6
         private const val BIOMETRIC_CIPHER_VERSION = "1"
         private const val MAX_EMBEDDINGS_PER_STUDENT = 5
         private const val THUMBNAIL_MAX_DIMENSION = 256
@@ -166,6 +180,13 @@ class LocalAttendanceStore(context: Context) :
                 embedding BLOB NOT NULL,
                 photo_jpeg BLOB NOT NULL,
                 model_id TEXT NOT NULL,
+                capture_id TEXT NOT NULL,
+                variant TEXT NOT NULL DEFAULT 'ORIGINAL',
+                active INTEGER NOT NULL DEFAULT 1,
+                quality REAL NOT NULL DEFAULT 1.0,
+                source_camera TEXT NOT NULL DEFAULT 'UNKNOWN',
+                pose TEXT NOT NULL DEFAULT 'UNSPECIFIED',
+                quarantine_reason TEXT,
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY(student_id) REFERENCES students(student_id) ON DELETE CASCADE
             )
@@ -197,6 +218,9 @@ class LocalAttendanceStore(context: Context) :
         )
         db.execSQL(
             "CREATE INDEX idx_face_embeddings_student ON face_embeddings(student_id)"
+        )
+        db.execSQL(
+            "CREATE INDEX idx_face_embeddings_capture ON face_embeddings(capture_id, active)"
         )
         createServerImportsTable(db)
         createDeletedStudentsTable(db)
@@ -236,6 +260,35 @@ class LocalAttendanceStore(context: Context) :
         if (oldVersion < 5) {
             createSecurityMetadataTable(db)
         }
+        if (oldVersion < 6) {
+            db.execSQL("ALTER TABLE face_embeddings ADD COLUMN capture_id TEXT")
+            db.execSQL(
+                "ALTER TABLE face_embeddings ADD COLUMN variant TEXT NOT NULL " +
+                    "DEFAULT 'ORIGINAL'"
+            )
+            db.execSQL(
+                "ALTER TABLE face_embeddings ADD COLUMN active INTEGER NOT NULL DEFAULT 1"
+            )
+            db.execSQL(
+                "ALTER TABLE face_embeddings ADD COLUMN quality REAL NOT NULL DEFAULT 1.0"
+            )
+            db.execSQL(
+                "ALTER TABLE face_embeddings ADD COLUMN source_camera TEXT NOT NULL " +
+                    "DEFAULT 'UNKNOWN'"
+            )
+            db.execSQL(
+                "ALTER TABLE face_embeddings ADD COLUMN pose TEXT NOT NULL DEFAULT 'UNSPECIFIED'"
+            )
+            db.execSQL("ALTER TABLE face_embeddings ADD COLUMN quarantine_reason TEXT")
+            db.execSQL(
+                "UPDATE face_embeddings SET capture_id = 'legacy-' || id " +
+                    "WHERE capture_id IS NULL OR capture_id = ''"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS idx_face_embeddings_capture " +
+                    "ON face_embeddings(capture_id, active)"
+            )
+        }
     }
 
     override fun onOpen(db: SQLiteDatabase) {
@@ -272,7 +325,7 @@ class LocalAttendanceStore(context: Context) :
         studentId: String,
         name: String,
         sex: String,
-        samples: List<Pair<FloatArray, ByteArray>>,
+        samples: List<LocalReferenceCapture>,
         existingStudentId: String? = null
     ) {
         val cleanId = studentId.trim()
@@ -288,14 +341,13 @@ class LocalAttendanceStore(context: Context) :
             db.delete("deleted_students", "student_id = ?", arrayOf(cleanId))
             db.delete("server_imports", "student_id = ?", arrayOf(cleanId))
             db.delete("face_embeddings", "student_id = ?", arrayOf(cleanId))
-            samples.forEach { (embedding, photoJpeg) ->
-                saveStudentEmbedding(
+            samples.forEach { capture ->
+                saveStudentCapture(
                     db,
                     cleanId,
                     cleanName,
                     sex,
-                    embedding,
-                    photoJpeg
+                    capture
                 )
             }
             db.setTransactionSuccessful()
@@ -308,7 +360,7 @@ class LocalAttendanceStore(context: Context) :
         val db = readableDatabase
         val references = db.rawQuery(
             """
-            SELECT id, student_id
+            SELECT id, student_id, capture_id
             FROM face_embeddings
             WHERE model_id != ?
             ORDER BY id
@@ -318,15 +370,78 @@ class LocalAttendanceStore(context: Context) :
             buildList {
                 while (cursor.moveToNext()) {
                     add(
-                        cursor.getLong(0) to cursor.getString(1)
+                        Triple(cursor.getLong(0), cursor.getString(1), cursor.getString(2))
                     )
                 }
             }
         }
-        return references.mapNotNull { (embeddingId, studentId) ->
+        return references.mapNotNull { (embeddingId, studentId, captureId) ->
             readFacePhotoBlob(db, embeddingId)?.let { photo ->
-                LegacyFaceReference(embeddingId, studentId, photo)
+                LegacyFaceReference(embeddingId, studentId, captureId, photo)
             }
+        }
+    }
+
+    fun referencesMissingMirror(): List<LegacyFaceReference> {
+        val db = readableDatabase
+        val rows = db.rawQuery(
+            """
+            SELECT original.id, original.student_id, original.capture_id
+            FROM face_embeddings AS original
+            WHERE original.model_id = ?
+              AND original.variant = 'ORIGINAL'
+              AND original.active = 1
+              AND NOT EXISTS(
+                  SELECT 1 FROM face_embeddings AS mirrored
+                  WHERE mirrored.student_id = original.student_id
+                    AND mirrored.capture_id = original.capture_id
+                    AND mirrored.variant = 'MIRRORED'
+              )
+            ORDER BY original.id
+            """.trimIndent(),
+            arrayOf(LocalFaceRecognizer.MODEL_ID)
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(Triple(cursor.getLong(0), cursor.getString(1), cursor.getString(2)))
+                }
+            }
+        }
+        return rows.mapNotNull { (embeddingId, studentId, captureId) ->
+            readFacePhotoBlob(db, embeddingId)?.let { photo ->
+                LegacyFaceReference(embeddingId, studentId, captureId, photo)
+            }
+        }
+    }
+
+    fun addMirroredFaceReference(
+        reference: LegacyFaceReference,
+        embedding: FloatArray,
+        mirroredPhotoJpeg: ByteArray
+    ): Boolean {
+        val db = writableDatabase
+        db.beginTransaction()
+        return try {
+            val profile = db.rawQuery(
+                "SELECT name, sex FROM students WHERE student_id = ? LIMIT 1",
+                arrayOf(reference.studentId)
+            ).use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) to cursor.getString(1) else null
+            } ?: return false
+            saveStudentEmbedding(
+                db,
+                reference.studentId,
+                profile.first,
+                profile.second,
+                embedding,
+                mirroredPhotoJpeg,
+                reference.captureId,
+                "MIRRORED"
+            )
+            db.setTransactionSuccessful()
+            true
+        } finally {
+            db.endTransaction()
         }
     }
 
@@ -395,11 +510,15 @@ class LocalAttendanceStore(context: Context) :
         val db = readableDatabase
         val rows = db.rawQuery(
             """
-            SELECT s.student_id, s.name, s.sex, COUNT(e.id) AS embedding_count,
+            SELECT s.student_id, s.name, s.sex,
+                   COUNT(DISTINCT CASE WHEN e.active = 1 THEN e.capture_id END)
+                       AS embedding_count,
                    (
                        SELECT latest.id
                        FROM face_embeddings latest
                        WHERE latest.student_id = s.student_id
+                         AND latest.variant = 'ORIGINAL'
+                         AND latest.active = 1
                        ORDER BY latest.id DESC
                        LIMIT 1
                    ) AS photo_embedding_id
@@ -442,7 +561,9 @@ class LocalAttendanceStore(context: Context) :
     fun listStudentsForServerUpload(): List<LocalStudentServerUpload> {
         return readableDatabase.rawQuery(
             """
-            SELECT s.student_id, s.name, s.sex, COUNT(e.id) AS reference_count
+            SELECT s.student_id, s.name, s.sex,
+                   COUNT(DISTINCT CASE WHEN e.active = 1 THEN e.capture_id END)
+                       AS reference_count
             FROM students s
             LEFT JOIN face_embeddings e ON e.student_id = s.student_id
             GROUP BY s.student_id, s.name, s.sex
@@ -483,7 +604,7 @@ class LocalAttendanceStore(context: Context) :
         val embeddingIds = db.query(
             "face_embeddings",
             arrayOf("id"),
-            "student_id = ?",
+            "student_id = ? AND variant = 'ORIGINAL' AND active = 1",
             arrayOf(studentId.trim()),
             null,
             null,
@@ -505,8 +626,8 @@ class LocalAttendanceStore(context: Context) :
         val db = readableDatabase
         val rows = db.query(
             "face_embeddings",
-            arrayOf("id", "created_at"),
-            "student_id = ?",
+            arrayOf("id", "created_at", "capture_id"),
+            "student_id = ? AND variant = 'ORIGINAL' AND active = 1",
             arrayOf(cleanId),
             null,
             null,
@@ -514,16 +635,28 @@ class LocalAttendanceStore(context: Context) :
         ).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
-                    add(cursor.getLong(0) to cursor.getLong(1))
+                    add(Triple(cursor.getLong(0), cursor.getLong(1), cursor.getString(2)))
                 }
             }
         }
-        return rows.mapNotNull { (referenceId, createdAt) ->
+        return rows.mapNotNull { (referenceId, createdAt, captureId) ->
             readFacePhotoBlob(db, referenceId)?.let { photo ->
+                val mirroredId = db.rawQuery(
+                    "SELECT id FROM face_embeddings WHERE student_id = ? " +
+                        "AND capture_id = ? AND variant = 'MIRRORED' LIMIT 1",
+                    arrayOf(cleanId, captureId)
+                ).use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getLong(0) else null
+                }
                 LocalFaceReference(
                     referenceId = referenceId,
                     studentId = cleanId,
                     photoJpeg = compactPhotoJpeg(photo, 640, 86) ?: photo,
+                    mirroredPhotoJpeg = mirroredId?.let { id ->
+                        readFacePhotoBlob(db, id)?.let { mirrored ->
+                            compactPhotoJpeg(mirrored, 640, 86) ?: mirrored
+                        }
+                    },
                     createdAt = createdAt
                 )
             }
@@ -533,31 +666,42 @@ class LocalAttendanceStore(context: Context) :
     fun replaceFaceReference(
         studentId: String,
         referenceId: Long,
-        embedding: FloatArray,
-        photoJpeg: ByteArray
+        capture: LocalReferenceCapture
     ): Boolean {
         val cleanId = studentId.trim()
-        val storedPhoto = compactPhotoJpeg(photoJpeg, REFERENCE_MAX_DIMENSION, 90)
-            ?: photoJpeg
         val db = writableDatabase
         db.beginTransaction()
         return try {
-            val updated = db.update(
-                "face_embeddings",
-                ContentValues().apply {
-                    put("embedding", encodeEmbedding(embedding, cleanId))
-                    put("photo_jpeg", encryptPhoto(storedPhoto, cleanId))
-                    put("model_id", LocalFaceRecognizer.MODEL_ID)
-                    put("created_at", System.currentTimeMillis())
-                },
-                "id = ? AND student_id = ?",
+            val captureId = db.rawQuery(
+                "SELECT capture_id FROM face_embeddings " +
+                    "WHERE id = ? AND student_id = ? LIMIT 1",
                 arrayOf(referenceId.toString(), cleanId)
-            ) > 0
-            if (updated) {
+            ).use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            } ?: return false
+            val profile = db.rawQuery(
+                "SELECT name, sex FROM students WHERE student_id = ? LIMIT 1",
+                arrayOf(cleanId)
+            ).use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) to cursor.getString(1) else null
+            } ?: return false
+            db.delete(
+                "face_embeddings",
+                "student_id = ? AND capture_id = ?",
+                arrayOf(cleanId, captureId)
+            )
+            saveStudentCapture(
+                db,
+                cleanId,
+                profile.first,
+                profile.second,
+                capture.copy(captureId = captureId)
+            )
+            run {
                 db.delete("server_imports", "student_id = ?", arrayOf(cleanId))
                 db.setTransactionSuccessful()
             }
-            updated
+            true
         } finally {
             db.endTransaction()
         }
@@ -568,15 +712,22 @@ class LocalAttendanceStore(context: Context) :
         val db = writableDatabase
         db.beginTransaction()
         return try {
-            val deleted = db.delete(
-                "face_embeddings",
-                "id = ? AND student_id = ?",
+            val captureId = db.rawQuery(
+                "SELECT capture_id FROM face_embeddings " +
+                    "WHERE id = ? AND student_id = ? LIMIT 1",
                 arrayOf(referenceId.toString(), cleanId)
+            ).use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            } ?: return null
+            db.delete(
+                "face_embeddings",
+                "capture_id = ? AND student_id = ?",
+                arrayOf(captureId, cleanId)
             )
-            if (deleted == 0) return null
             db.delete("server_imports", "student_id = ?", arrayOf(cleanId))
             val remaining = db.rawQuery(
-                "SELECT COUNT(*) FROM face_embeddings WHERE student_id = ?",
+                "SELECT COUNT(DISTINCT capture_id) FROM face_embeddings " +
+                    "WHERE student_id = ? AND active = 1",
                 arrayOf(cleanId)
             ).use { cursor ->
                 cursor.moveToFirst()
@@ -1060,10 +1211,10 @@ class LocalAttendanceStore(context: Context) :
     private fun loadEmbeddings(db: SQLiteDatabase): List<RecognitionReference> {
         return db.rawQuery(
             """
-            SELECT e.student_id, s.name, e.embedding
+            SELECT e.student_id, s.name, e.embedding, e.capture_id, e.variant
             FROM face_embeddings e
             JOIN students s ON s.student_id = e.student_id
-            WHERE e.model_id = ?
+            WHERE e.model_id = ? AND e.active = 1
             """.trimIndent(),
             arrayOf(LocalFaceRecognizer.MODEL_ID)
         ).use { cursor ->
@@ -1073,7 +1224,9 @@ class LocalAttendanceStore(context: Context) :
                         RecognitionReference(
                             cursor.getString(0),
                             cursor.getString(1),
-                            decodeEmbedding(cursor.getBlob(2), cursor.getString(0))
+                            decodeEmbedding(cursor.getBlob(2), cursor.getString(0)),
+                            cursor.getString(3),
+                            cursor.getString(4)
                         )
                     )
                 }
@@ -1092,24 +1245,67 @@ class LocalAttendanceStore(context: Context) :
     }
 
     private fun pruneEmbeddings(db: SQLiteDatabase, studentId: String) {
-        val staleIds = db.query(
-            "face_embeddings",
-            arrayOf("id"),
-            "student_id = ?",
-            arrayOf(studentId),
-            null,
-            null,
-            "id DESC"
+        val staleCaptureIds = db.rawQuery(
+            """
+            SELECT capture_id, MAX(id) AS latest_id
+            FROM face_embeddings
+            WHERE student_id = ?
+            GROUP BY capture_id
+            ORDER BY latest_id DESC
+            """.trimIndent(),
+            arrayOf(studentId)
         ).use { cursor ->
             buildList {
                 var position = 0
                 while (cursor.moveToNext()) {
-                    if (position >= MAX_EMBEDDINGS_PER_STUDENT) add(cursor.getLong(0))
+                    if (position >= MAX_EMBEDDINGS_PER_STUDENT) add(cursor.getString(0))
                     position++
                 }
             }
         }
-        staleIds.forEach { id -> db.delete("face_embeddings", "id = ?", arrayOf(id.toString())) }
+        staleCaptureIds.forEach { captureId ->
+            db.delete(
+                "face_embeddings",
+                "student_id = ? AND capture_id = ?",
+                arrayOf(studentId, captureId)
+            )
+        }
+    }
+
+    private fun saveStudentCapture(
+        db: SQLiteDatabase,
+        studentId: String,
+        name: String,
+        sex: String,
+        capture: LocalReferenceCapture
+    ): Long {
+        val originalId = saveStudentEmbedding(
+            db,
+            studentId,
+            name,
+            sex,
+            capture.originalEmbedding,
+            capture.originalPhotoJpeg,
+            capture.captureId,
+            "ORIGINAL",
+            capture.sourceCamera,
+            capture.pose,
+            capture.quality
+        )
+        saveStudentEmbedding(
+            db,
+            studentId,
+            name,
+            sex,
+            capture.mirroredEmbedding,
+            capture.mirroredPhotoJpeg,
+            capture.captureId,
+            "MIRRORED",
+            capture.sourceCamera,
+            capture.pose,
+            capture.quality
+        )
+        return originalId
     }
 
     private fun saveStudentEmbedding(
@@ -1118,7 +1314,12 @@ class LocalAttendanceStore(context: Context) :
         name: String,
         sex: String,
         embedding: FloatArray,
-        photoJpeg: ByteArray
+        photoJpeg: ByteArray,
+        captureId: String = UUID.randomUUID().toString(),
+        variant: String = "ORIGINAL",
+        sourceCamera: String = "UNKNOWN",
+        pose: String = "UNSPECIFIED",
+        quality: Float = 1f
     ): Long {
         val storedPhoto = compactPhotoJpeg(photoJpeg, REFERENCE_MAX_DIMENSION, 90) ?: photoJpeg
         val student = ContentValues().apply {
@@ -1140,6 +1341,12 @@ class LocalAttendanceStore(context: Context) :
                 put("embedding", encodeEmbedding(embedding, studentId))
                 put("photo_jpeg", encryptPhoto(storedPhoto, studentId))
                 put("model_id", LocalFaceRecognizer.MODEL_ID)
+                put("capture_id", captureId)
+                put("variant", variant)
+                put("active", 1)
+                put("quality", quality.coerceIn(0f, 1f))
+                put("source_camera", sourceCamera.uppercase(Locale.ROOT))
+                put("pose", pose.uppercase(Locale.ROOT))
                 put("created_at", System.currentTimeMillis())
             }
         )

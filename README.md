@@ -12,7 +12,7 @@ Aplicacion Android
     `-- Modo automatico: servidor compatible y telefono como respaldo
 
 API FastAPI permanente
-    |-- InsightFace para deteccion + el mismo ArcFace w600k_mbf ONNX
+    |-- SCRFD det_10g + ArcFace w600k_r50 ONNX (perfil canonico)
     |-- HTTPS y clave de acceso
     `-- SQLite y modelos en disco persistente
 ```
@@ -29,6 +29,8 @@ identidades y asistencia sin computadora ni conexion a Internet.
   SQLite.
 - Alineacion ArcFace de cinco puntos tanto en Android como en Railway.
 - Embeddings ArcFace y comparacion con umbral configurable.
+- Asignacion bipartita global para evitar nombres mezclados en fotos grupales.
+- Variantes original y espejo agrupadas como una sola referencia logica.
 - Resultado `no identificado` cuando no se supera el umbral.
 - Sesiones de asistencia por clase.
 - Listas de asistencia identificadas por fecha y materia.
@@ -143,17 +145,17 @@ US East, comprueba `/health` y monta un volumen persistente de 500 MB en
 | Variable | `ASISTENCIA_API_URL` | URL HTTPS `*.up.railway.app` asignada por Railway |
 | Secreto | `ASISTENCIA_API_KEY` | La misma clave configurada en Railway |
 
-La API usa `FACE_SIMILARITY_THRESHOLD=0.50`,
-`FACE_SINGLE_REFERENCE_THRESHOLD=0.58`, `FACE_MINIMUM_SCORE_MARGIN=0.05`,
-`FACE_MINIMUM_REFERENCE_SUPPORT=0.38`, `FACE_SECOND_REFERENCE_WEIGHT=0.30` e
-`INSIGHTFACE_DETECTION_SIZE=640` como
+La API usa `FACE_SIMILARITY_THRESHOLD=0.48`,
+`FACE_SINGLE_REFERENCE_THRESHOLD=0.55`, `FACE_MINIMUM_SCORE_MARGIN=0.07`,
+`FACE_MINIMUM_REFERENCE_SUPPORT=0.30`, `FACE_SECOND_REFERENCE_WEIGHT=0.20` e
+`INSIGHTFACE_DETECTION_SIZE=960` como
 valores predeterminados. El margen evita aceptar identidades ambiguas; el
 soporte y el peso de la segunda referencia exigen corroboracion cuando el
 estudiante tiene varias fotos. El
 tamaño de detección conserva más detalle en fotografías grupales. Estos valores
-forman parte del perfil facial compartido y deben mantenerse iguales en
-Railway y Android. La app valida el perfil publicado en `/health` antes de usar
-el servidor.
+forman parte del perfil canonico R50 de Railway. Android conserva MBF como
+respaldo sin conexion y nunca compara embeddings de modelos distintos. La app
+valida ambos perfiles publicados en `/health` antes de usar el servidor.
 
 El servicio de este proyecto esta publicado en:
 
@@ -171,10 +173,10 @@ plan. El volumen evita que los registros desaparezcan al desplegar una nueva
 version, pero se recomienda activar copias de seguridad antes de almacenar datos
 biometricos reales.
 
-Railway utiliza el detector ligero de `buffalo_sc`, pero la extracción de
-identidad siempre se ejecuta con el mismo archivo `w600k_mbf.onnx` incluido en
-Android. El servidor valida su SHA-256 al cargarlo para impedir que ambos
-motores comparen embeddings de modelos diferentes.
+Railway utiliza `buffalo_l`: detector SCRFD `det_10g` y ArcFace
+`w600k_r50.onnx`. El paquete y ambos archivos se verifican por SHA-256 durante
+la construccion. El telefono conserva `w600k_mbf.onnx` para el modo local; cada
+embedding se compara solamente con referencias de su mismo perfil.
 
 ## Flujo desde Android
 
@@ -242,8 +244,8 @@ necesidad de Android Studio:
 Para publicar la version actual:
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 Para una firma estable, genera una clave una sola vez y mantenla fuera del

@@ -33,6 +33,15 @@ def cosine_similarity(first: ArrayLike, second: ArrayLike) -> float:
 
 
 @dataclass(frozen=True)
+class ReferenceEmbedding:
+    """Una variante de embedding perteneciente a una captura logica."""
+
+    capture_id: str
+    embedding: ArrayLike
+    variant: str = "ORIGINAL"
+
+
+@dataclass(frozen=True)
 class RecognitionMatch:
     student_id: str | None
     similarity: float
@@ -48,11 +57,11 @@ class _StudentScore:
 
 
 class EmbeddingMatcher:
-    """Compara embeddings y evita repetir identidades en una misma imagen."""
+    """Compara galerias logicas y asigna identidades globalmente por imagen."""
 
     def __init__(
         self,
-        references: Mapping[str, Sequence[ArrayLike]],
+        references: Mapping[str, Sequence[ArrayLike | ReferenceEmbedding]],
         threshold: float = SIMILARITY_THRESHOLD,
         minimum_margin: float = MINIMUM_SCORE_MARGIN,
         single_reference_threshold: float | None = None,
@@ -82,58 +91,134 @@ class EmbeddingMatcher:
         )
         self._minimum_reference_support = minimum_reference_support
         self._second_reference_weight = second_reference_weight
-        self._references = {
-            student_id: tuple(normalize_embedding(item) for item in embeddings)
-            for student_id, embeddings in references.items()
-            if embeddings
-        }
+        self._references: dict[str, dict[str, tuple[Embedding, ...]]] = {}
+        for student_id, items in references.items():
+            captures: dict[str, list[Embedding]] = {}
+            for index, item in enumerate(items):
+                if isinstance(item, ReferenceEmbedding):
+                    capture_id = item.capture_id
+                    embedding = item.embedding
+                else:
+                    capture_id = f"legacy-{index}"
+                    embedding = item
+                captures.setdefault(capture_id, []).append(
+                    normalize_embedding(embedding)
+                )
+            if captures:
+                self._references[student_id] = {
+                    capture_id: tuple(variants)
+                    for capture_id, variants in captures.items()
+                }
 
     def match(self, query: ArrayLike) -> RecognitionMatch:
         scores = self._ranked_scores(query)
         return self._match_from_scores(scores)
 
     def match_batch(self, queries: Sequence[ArrayLike]) -> list[RecognitionMatch]:
-        """Conserva solo la mejor cara por identidad sin reasignar perdedores."""
+        """Maximiza el conjunto completo sin repetir identidades ni forzar caras."""
         ranked_scores = [self._ranked_scores(query) for query in queries]
-        results = [self._rejected_match(scores) for scores in ranked_scores]
-        candidates: list[tuple[float, int, str]] = []
+        if not ranked_scores:
+            return []
 
-        for face_index, scores in enumerate(ranked_scores):
-            candidate = self._match_from_scores(scores)
-            if candidate.accepted and candidate.student_id is not None:
-                candidates.append(
-                    (candidate.similarity, face_index, candidate.student_id)
-                )
+        student_ids = sorted(self._references)
+        student_positions = {
+            student_id: index for index, student_id in enumerate(student_ids)
+        }
+        score_maps = [
+            {score.student_id: score for score in scores}
+            for scores in ranked_scores
+        ]
+        face_count = len(queries)
+        invalid = -1_000_000.0
+        weights: list[list[float]] = []
+        for face_index, score_map in enumerate(score_maps):
+            row = [invalid] * (len(student_ids) + face_count)
+            for student_id, position in student_positions.items():
+                score = score_map.get(student_id)
+                if score is None or not score.has_reference_support:
+                    continue
+                threshold = self._threshold_for(score)
+                if score.similarity >= threshold:
+                    row[position] = score.similarity - threshold + 1e-6
+            row[len(student_ids) + face_index] = 0.0
+            weights.append(row)
 
-        claimed_students: set[str] = set()
-        for similarity, face_index, student_id in sorted(
-            candidates,
-            key=lambda item: (-item[0], item[1], item[2]),
-        ):
-            if student_id in claimed_students:
+        assignments = _maximum_weight_assignment(weights)
+        claimed = {
+            student_ids[column]
+            for column in assignments
+            if 0 <= column < len(student_ids)
+        }
+        for _ in range(face_count + 1):
+            accepted_claims: set[str] = set()
+            for face_index, column in enumerate(assignments):
+                if column < 0 or column >= len(student_ids):
+                    continue
+                student_id = student_ids[column]
+                selected = score_maps[face_index][student_id]
+                competitors = [
+                    score.similarity
+                    for score in ranked_scores[face_index]
+                    if score.student_id != student_id
+                    and score.student_id not in claimed
+                ]
+                if (
+                    not competitors
+                    or selected.similarity - max(competitors)
+                    >= self._minimum_margin
+                ):
+                    accepted_claims.add(student_id)
+            if accepted_claims == claimed:
+                break
+            claimed = accepted_claims
+        results: list[RecognitionMatch] = []
+        for face_index, column in enumerate(assignments):
+            scores = ranked_scores[face_index]
+            rejected = self._rejected_match(scores)
+            if column < 0 or column >= len(student_ids):
+                results.append(rejected)
                 continue
-            claimed_students.add(student_id)
-            results[face_index] = RecognitionMatch(
-                student_id=student_id,
-                similarity=similarity,
-                accepted=True,
+            student_id = student_ids[column]
+            selected = score_maps[face_index][student_id]
+            available_competitors = [
+                score.similarity
+                for score in scores
+                if score.student_id != student_id
+                and score.student_id not in claimed
+            ]
+            has_margin = (
+                not available_competitors
+                or selected.similarity - max(available_competitors)
+                >= self._minimum_margin
             )
-
+            if not has_margin or student_id not in claimed:
+                results.append(rejected)
+                continue
+            results.append(
+                RecognitionMatch(student_id, selected.similarity, True)
+            )
         return results
 
     def _ranked_scores(self, query: ArrayLike) -> list[_StudentScore]:
         query_vector = normalize_embedding(query)
         scores: list[_StudentScore] = []
-        for student_id, embeddings in self._references.items():
-            similarities = sorted(
+        for student_id, captures in self._references.items():
+            capture_similarities = sorted(
                 (
-                    cosine_similarity(query_vector, reference)
-                    for reference in embeddings
+                    max(
+                        cosine_similarity(query_vector, variant)
+                        for variant in variants
+                    )
+                    for variants in captures.values()
                 ),
                 reverse=True,
             )
-            best_similarity = similarities[0]
-            second_similarity = similarities[1] if len(similarities) > 1 else None
+            best_similarity = capture_similarities[0]
+            second_similarity = (
+                capture_similarities[1]
+                if len(capture_similarities) > 1
+                else None
+            )
             combined_similarity = (
                 best_similarity
                 if second_similarity is None
@@ -146,7 +231,7 @@ class EmbeddingMatcher:
                 _StudentScore(
                     student_id=student_id,
                     similarity=combined_similarity,
-                    reference_count=len(similarities),
+                    reference_count=len(capture_similarities),
                     has_reference_support=(
                         second_similarity is None
                         or second_similarity >= self._minimum_reference_support
@@ -161,27 +246,27 @@ class EmbeddingMatcher:
     ) -> RecognitionMatch:
         if not scores:
             return RecognitionMatch(None, -1.0, False)
-
         best = scores[0]
         second_similarity = scores[1].similarity if len(scores) > 1 else -1.0
-        has_margin = (
-            len(scores) == 1
-            or best.similarity - second_similarity >= self._minimum_margin
-        )
-        threshold = (
-            self._single_reference_threshold
-            if best.reference_count == 1
-            else self._threshold
-        )
         accepted = (
-            best.similarity >= threshold
-            and has_margin
+            best.similarity >= self._threshold_for(best)
+            and (
+                len(scores) == 1
+                or best.similarity - second_similarity >= self._minimum_margin
+            )
             and best.has_reference_support
         )
         return RecognitionMatch(
             student_id=best.student_id if accepted else None,
             similarity=best.similarity,
             accepted=accepted,
+        )
+
+    def _threshold_for(self, score: _StudentScore) -> float:
+        return (
+            self._single_reference_threshold
+            if score.reference_count == 1
+            else self._threshold
         )
 
     @staticmethod
@@ -191,3 +276,65 @@ class EmbeddingMatcher:
         similarity = scores[0].similarity if scores else -1.0
         return RecognitionMatch(None, similarity, False)
 
+
+def _maximum_weight_assignment(weights: Sequence[Sequence[float]]) -> list[int]:
+    """Algoritmo hungaro rectangular; requiere tantas columnas como filas."""
+    row_count = len(weights)
+    if row_count == 0:
+        return []
+    column_count = len(weights[0])
+    if column_count < row_count or any(len(row) != column_count for row in weights):
+        raise ValueError("La matriz de asignacion debe ser rectangular y ancha.")
+
+    max_weight = max(max(row) for row in weights)
+    costs = [[max_weight - value for value in row] for row in weights]
+    u = [0.0] * (row_count + 1)
+    v = [0.0] * (column_count + 1)
+    p = [0] * (column_count + 1)
+    way = [0] * (column_count + 1)
+
+    for row in range(1, row_count + 1):
+        p[0] = row
+        column0 = 0
+        minimum = [float("inf")] * (column_count + 1)
+        used = [False] * (column_count + 1)
+        while True:
+            used[column0] = True
+            current_row = p[column0]
+            delta = float("inf")
+            column1 = 0
+            for column in range(1, column_count + 1):
+                if used[column]:
+                    continue
+                current = (
+                    costs[current_row - 1][column - 1]
+                    - u[current_row]
+                    - v[column]
+                )
+                if current < minimum[column]:
+                    minimum[column] = current
+                    way[column] = column0
+                if minimum[column] < delta:
+                    delta = minimum[column]
+                    column1 = column
+            for column in range(column_count + 1):
+                if used[column]:
+                    u[p[column]] += delta
+                    v[column] -= delta
+                else:
+                    minimum[column] -= delta
+            column0 = column1
+            if p[column0] == 0:
+                break
+        while True:
+            column1 = way[column0]
+            p[column0] = p[column1]
+            column0 = column1
+            if column0 == 0:
+                break
+
+    assignment = [-1] * row_count
+    for column in range(1, column_count + 1):
+        if p[column] != 0:
+            assignment[p[column] - 1] = column - 1
+    return assignment

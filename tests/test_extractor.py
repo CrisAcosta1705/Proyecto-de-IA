@@ -56,11 +56,11 @@ class InsightFaceExtractorTest(unittest.TestCase):
 
         faces = extractor.extract(image)
 
-        self.assertEqual(extractor._app.calls, 3)
+        self.assertEqual(extractor._app.calls, 4)
         self.assertEqual(len(faces), 3)
         self.assertEqual(
             [(face.box.x1, face.box.x2) for face in faces],
-            [(100, 200), (400, 500), (800, 900)],
+            [(100, 200), (400, 500), (844, 944)],
         )
         center = next(face for face in faces if face.box.x1 == 400)
         np.testing.assert_allclose(center.embedding, [0.0, 1.0, 0.0])

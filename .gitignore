@@ -37,3 +37,6 @@ android-app/app/build/
 *.aab
 *.jks
 *.keystore
+
+# Conjunto privado de regresion facial (nunca se publica).
+face-eval-private/

@@ -2,6 +2,7 @@ import re
 from datetime import date
 from io import BytesIO
 from dataclasses import asdict, dataclass
+import uuid
 from typing import Sequence
 
 import cv2
@@ -12,15 +13,16 @@ from asistencia_ia.recognition import (
     EmbeddingMatcher,
     FaceEmbeddingExtractor,
 )
-from asistencia_ia.recognition.matcher import cosine_similarity
+from asistencia_ia.recognition.matcher import cosine_similarity, normalize_embedding
 from asistencia_ia.recognition.profile import (
     MINIMUM_REFERENCE_SUPPORT,
     MINIMUM_SCORE_MARGIN,
     SECOND_REFERENCE_WEIGHT,
     SIMILARITY_THRESHOLD,
     SINGLE_REFERENCE_THRESHOLD,
+    PROFILE_ID,
 )
-from asistencia_ia.storage import AttendanceDatabase
+from asistencia_ia.storage import AttendanceDatabase, FaceReferenceCapture
 
 
 STUDENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{2,64}$")
@@ -49,6 +51,7 @@ def decode_image(content: bytes) -> np.ndarray:
 
 @dataclass(frozen=True)
 class FaceRecognitionResult:
+    face_id: str
     box: dict[str, int]
     detection_confidence: float
     student_id: str | None
@@ -93,6 +96,7 @@ class AttendanceService:
         photo_mime_type: str = "image/jpeg",
         sex: str = "NO_ESPECIFICADO",
         allow_existing_student: bool = False,
+        reference_metadata: Sequence[dict[str, object]] | None = None,
     ) -> int:
         student_id = student_id.strip()
         name = name.strip()
@@ -116,53 +120,204 @@ class AttendanceService:
             raise FaceProcessingError("Ya existe un estudiante con ese carnet.")
         if conflict == "name":
             raise FaceProcessingError("Ya existe un estudiante con ese nombre.")
-        embeddings = []
-        valid_images = []
+        captures: list[FaceReferenceCapture] = []
         rejected_images = 0
-        for content in image_contents:
-            faces = self.extractor.extract(decode_image(content))
+        metadata = list(reference_metadata or [])
+        for index, content in enumerate(image_contents):
+            image = decode_image(content)
+            mirrored_image = cv2.flip(image, 1)
+            extract_variants = getattr(
+                self.extractor,
+                "extract_reference_variants",
+                None,
+            )
+            if callable(extract_variants):
+                faces, mirrored_faces = extract_variants(image)
+            else:
+                faces = self.extractor.extract(image)
+                # Extractores alternativos antiguos no exponen variantes. La
+                # referencia conserva una sola captura logica hasta regenerarse.
+                mirrored_faces = faces
             if len(faces) != 1:
                 rejected_images += 1
                 continue
-            embeddings.append(faces[0].embedding)
-            valid_images.append(content)
+            if len(mirrored_faces) != 1:
+                rejected_images += 1
+                continue
+            encoded, mirrored_jpeg = cv2.imencode(
+                ".jpg", mirrored_image, [cv2.IMWRITE_JPEG_QUALITY, 92]
+            )
+            if not encoded:
+                rejected_images += 1
+                continue
+            face = faces[0]
+            image_area = max(1, image.shape[0] * image.shape[1])
+            face_ratio = face.box.area / image_area
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            brightness = float(np.mean(gray))
+            item_metadata = metadata[index] if index < len(metadata) else {}
+            size_quality = min(1.0, max(0.0, face_ratio * 8.0))
+            sharpness_quality = min(1.0, max(0.0, sharpness / 80.0))
+            brightness_quality = max(
+                0.0,
+                1.0 - abs(brightness - 127.5) / 127.5,
+            )
+            captures.append(
+                FaceReferenceCapture(
+                    capture_id=str(item_metadata.get("capture_id") or uuid.uuid4().hex),
+                    original_embedding=face.embedding,
+                    mirrored_embedding=mirrored_faces[0].embedding,
+                    original_photo=content,
+                    mirrored_photo=mirrored_jpeg.tobytes(),
+                    photo_mime_type=photo_mime_type,
+                    source_camera=str(item_metadata.get("source_camera") or "UNKNOWN"),
+                    pose=str(item_metadata.get("pose") or "UNSPECIFIED"),
+                    quality=(
+                        0.50 * size_quality
+                        + 0.35 * sharpness_quality
+                        + 0.15 * brightness_quality
+                    ),
+                )
+            )
 
-        if not embeddings:
+        if not captures:
             raise FaceProcessingError(
                 "Ninguna foto contiene exactamente un rostro detectable; "
                 f"se rechazaron {rejected_images}."
             )
+        self._reject_cross_identity_collision(student_id, captures)
         if not replace_embeddings:
-            existing_references = self.database.references().get(student_id, [])
-            novel_embeddings = []
-            known_embeddings = list(existing_references)
-            for embedding in embeddings:
+            existing_references = self.database.reference_records(PROFILE_ID).get(
+                student_id,
+                [],
+            )
+            existing_capture_count = len(
+                {reference.capture_id for reference in existing_references}
+            )
+            novel_captures = []
+            known_embeddings = [
+                normalize_embedding(reference.embedding)
+                for reference in existing_references
+            ]
+            for capture in captures:
+                embedding = normalize_embedding(capture.original_embedding)
                 if any(
                     cosine_similarity(embedding, reference) >= 0.999
                     for reference in known_embeddings
                 ):
                     continue
-                novel_embeddings.append(embedding)
+                novel_captures.append(capture)
                 known_embeddings.append(embedding)
-            embeddings = novel_embeddings
+            captures = novel_captures
 
-            if len(existing_references) + len(embeddings) > 20:
+            if existing_capture_count + len(captures) > 20:
                 raise FaceProcessingError(
                     "Un estudiante no puede tener mas de 20 embeddings registrados."
                 )
-            if not embeddings:
+            if not captures:
                 self.database.update_student_profile(student_id, name, sex)
                 return 0
 
-        return self.database.save_student(
+        added = self.database.save_student_captures(
             student_id,
             name,
-            embeddings,
+            captures,
             replace_embeddings=replace_embeddings,
-            photo=valid_images[0],
-            photo_mime_type=photo_mime_type,
             sex=sex,
         )
+        self.audit_reference_outliers()
+        return added
+
+    def _reject_cross_identity_collision(
+        self,
+        student_id: str,
+        captures: Sequence[FaceReferenceCapture],
+    ) -> None:
+        references = self.database.reference_records(PROFILE_ID)
+        for capture in captures:
+            candidate = normalize_embedding(capture.original_embedding)
+            for registered_id, items in references.items():
+                if registered_id == student_id:
+                    continue
+                best = max(
+                    cosine_similarity(candidate, item.embedding)
+                    for item in items
+                )
+                if best >= 0.68:
+                    raise FaceProcessingError(
+                        "La referencia coincide con otro estudiante registrado; "
+                        "revise la identidad antes de guardarla."
+                    )
+
+    def audit_reference_outliers(self) -> list[dict[str, object]]:
+        references = self.database.reference_records(PROFILE_ID)
+        captures_by_student: dict[str, dict[str, list[np.ndarray]]] = {}
+        for student_id, items in references.items():
+            grouped: dict[str, list[np.ndarray]] = {}
+            for item in items:
+                grouped.setdefault(item.capture_id, []).append(
+                    normalize_embedding(item.embedding)
+                )
+            captures_by_student[student_id] = grouped
+
+        quarantined: list[dict[str, object]] = []
+        for student_id, captures in captures_by_student.items():
+            if len(captures) < 3:
+                continue
+            remaining = len(captures)
+            candidates: list[tuple[float, str, float, float]] = []
+            other_students = [
+                variants
+                for other_id, other_captures in captures_by_student.items()
+                if other_id != student_id
+                for variants in other_captures.values()
+            ]
+            for capture_id, variants in captures.items():
+                peers = [
+                    peer_variants
+                    for peer_id, peer_variants in captures.items()
+                    if peer_id != capture_id
+                ]
+                best_same = max(
+                    cosine_similarity(variant, peer)
+                    for variant in variants
+                    for peer_variants in peers
+                    for peer in peer_variants
+                )
+                best_other = max(
+                    (
+                        cosine_similarity(variant, peer)
+                        for variant in variants
+                        for peer_variants in other_students
+                        for peer in peer_variants
+                    ),
+                    default=-1.0,
+                )
+                suspicious = best_same < 0.15 or (
+                    best_other >= 0.55 and best_other - best_same >= 0.12
+                )
+                if suspicious:
+                    candidates.append((best_same, capture_id, best_same, best_other))
+            for _, capture_id, best_same, best_other in sorted(candidates):
+                if remaining <= 2:
+                    break
+                reason = (
+                    f"atipica: misma_identidad={best_same:.3f}; "
+                    f"otra_identidad={best_other:.3f}"
+                )
+                if self.database.quarantine_capture(capture_id, reason):
+                    remaining -= 1
+                    quarantined.append(
+                        {
+                            "student_id": student_id,
+                            "capture_id": capture_id,
+                            "same_identity_similarity": round(best_same, 4),
+                            "other_identity_similarity": round(best_other, 4),
+                            "reason": reason,
+                        }
+                    )
+        return quarantined
 
     def create_session(
         self,
@@ -206,10 +361,28 @@ class AttendanceService:
         if session["ended_at"] is not None:
             raise ValueError("La sesion de asistencia ya esta cerrada.")
 
+        result = self.analyze(image_content)
+        for face in result["faces"]:
+            student_id = face["student_id"]
+            if not face["recognized"] or student_id is None:
+                continue
+            face["attendance_recorded"] = self.database.record_attendance(
+                session_id,
+                student_id,
+                float(face["similarity"]),
+            )
+        attendance = self.database.attendance(session_id)
+        result["session_id"] = session_id
+        result["attendance_count"] = len(attendance)
+        return result
+
+    def analyze(self, image_content: bytes) -> dict[str, object]:
+        """Reconoce una imagen sin crear ni modificar asistencias."""
+
         image = decode_image(image_content)
         image_height, image_width = image.shape[:2]
         faces = self.extractor.extract(image)
-        references = self.database.references()
+        references = self.database.reference_records(PROFILE_ID)
         names = self.database.student_names()
         matcher = EmbeddingMatcher(
             references,
@@ -220,22 +393,16 @@ class AttendanceService:
             self.second_reference_weight,
         )
         matches = matcher.match_batch([face.embedding for face in faces])
-        recognized_in_frame: set[str] = set()
         results: list[FaceRecognitionResult] = []
 
         for face, match in zip(faces, matches, strict=True):
-            recorded = False
             student_id = match.student_id
-            if match.accepted and student_id is not None:
-                recorded = self.database.record_attendance(
-                    session_id,
-                    student_id,
-                    match.similarity,
-                )
-                recognized_in_frame.add(student_id)
-
             results.append(
                 FaceRecognitionResult(
+                    face_id=(
+                        f"face-{face.box.x1}-{face.box.y1}-"
+                        f"{face.box.x2}-{face.box.y2}"
+                    ),
                     box={
                         "x1": face.box.x1,
                         "y1": face.box.y1,
@@ -247,18 +414,17 @@ class AttendanceService:
                     student_name=names.get(student_id) if student_id else None,
                     similarity=match.similarity,
                     recognized=match.accepted,
-                    attendance_recorded=recorded,
+                    attendance_recorded=False,
                 )
             )
 
-        attendance = self.database.attendance(session_id)
         return {
-            "session_id": session_id,
+            "session_id": None,
             "image_width": image_width,
             "image_height": image_height,
             "faces_detected": len(faces),
-            "recognized_count": len(recognized_in_frame),
-            "attendance_count": len(attendance),
+            "recognized_count": sum(item.recognized for item in results),
+            "attendance_count": 0,
             "faces": [item.to_dict() for item in results],
         }
 

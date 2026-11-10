@@ -51,10 +51,10 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version_name="${GITHUB_REF_NAME#v}"
           else
-            version_name="0.1.0-dev.$GITHUB_RUN_NUMBER"
+            version_name="0.4.0-dev.$GITHUB_RUN_NUMBER"
           fi
           {
-            echo "ANDROID_VERSION_CODE=$GITHUB_RUN_NUMBER"
+            echo "ANDROID_VERSION_CODE=$((50000 + GITHUB_RUN_NUMBER))"
             echo "ANDROID_VERSION_NAME=$version_name"
           } >> "$GITHUB_ENV"
           echo "name=$version_name" >> "$GITHUB_OUTPUT"

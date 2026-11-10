@@ -250,6 +250,8 @@
     <string name="face_reference_date">Registrada: %1$s</string>
     <string name="face_reference_photo_description">Fotografia de la referencia %1$d</string>
     <string name="face_reference_preview_title">Referencia %1$d de %2$s</string>
+    <string name="face_reference_original">Vista original</string>
+    <string name="face_reference_mirrored">Vista espejo</string>
     <string name="replace_face_reference">Cambiar referencia</string>
     <string name="delete_face_reference">Eliminar referencia</string>
     <string name="replace_face_reference_processing">Analizando la nueva referencia facial&#8230;</string>

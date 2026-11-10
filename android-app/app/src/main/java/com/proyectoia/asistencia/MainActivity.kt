@@ -82,6 +82,7 @@ import java.text.DateFormat
 import java.time.LocalDate
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -352,7 +353,10 @@ class MainActivity : ComponentActivity() {
 
     private data class GuidedRegistrationSample(
         val embedding: FloatArray,
-        val jpeg: ByteArray
+        val jpeg: ByteArray,
+        val captureId: String = UUID.randomUUID().toString(),
+        val pose: String = "UNSPECIFIED",
+        val sourceCamera: String = "UNKNOWN"
     )
 
     private data class GuidedRegistrationContext(
@@ -949,7 +953,12 @@ class MainActivity : ComponentActivity() {
         networkExecutor.execute {
             try {
                 localRecognizer.warmUp()
-                val migration = migrateLegacyFaceReferences()
+                val legacyMigration = migrateLegacyFaceReferences()
+                val mirrorMigration = migrateMissingMirroredReferences()
+                val migration = FaceReferenceMigrationResult(
+                    legacyMigration.migrated + mirrorMigration.migrated,
+                    legacyMigration.failed + mirrorMigration.failed
+                )
                 Log.i(LOG_TAG, "Modelo facial local cargado y validado.")
                 if (migration.migrated > 0 || migration.failed > 0) {
                     Log.i(
@@ -1009,6 +1018,37 @@ class MainActivity : ComponentActivity() {
                     LOG_TAG,
                     "Error reconstruyendo la referencia ${reference.embeddingId} " +
                         "de ${reference.studentId}.",
+                    error
+                )
+            }
+        }
+        return FaceReferenceMigrationResult(migrated, failed)
+    }
+
+    private fun migrateMissingMirroredReferences(): FaceReferenceMigrationResult {
+        var migrated = 0
+        var failed = 0
+        localStore.referencesMissingMirror().forEach { reference ->
+            try {
+                val mirroredPhoto = mirroredJpeg(reference.photoJpeg)
+                val extraction = extractGalleryFaceReference(mirroredPhoto) {}
+                if (
+                    extraction.samples.size == 1 &&
+                    localStore.addMirroredFaceReference(
+                        reference,
+                        extraction.samples.single().embedding,
+                        mirroredPhoto
+                    )
+                ) {
+                    migrated++
+                } else {
+                    failed++
+                }
+            } catch (error: Exception) {
+                failed++
+                Log.w(
+                    LOG_TAG,
+                    "No se genero la variante espejo de ${reference.embeddingId}.",
                     error
                 )
             }
@@ -1839,7 +1879,9 @@ class MainActivity : ComponentActivity() {
                         if (!guidedRegistrationActive || guidedPoseIndex != pose.ordinal) return@execute
                         guidedSamples += GuidedRegistrationSample(
                             extraction.samples.single().embedding,
-                            jpeg
+                            jpeg,
+                            pose = pose.name,
+                            sourceCamera = currentReferenceSourceCamera()
                         )
                         guidedPoseIndex++
                         runOnUiThread {
@@ -2048,7 +2090,9 @@ class MainActivity : ComponentActivity() {
                         if (passed && guidedSamples.size < 5) {
                             guidedSamples += GuidedRegistrationSample(
                                 extraction.samples.single().embedding,
-                                jpeg
+                                jpeg,
+                                pose = "VERIFICATION",
+                                sourceCamera = currentReferenceSourceCamera()
                             )
                         }
                         showFrozenRegistrationVerification(
@@ -2179,7 +2223,7 @@ class MainActivity : ComponentActivity() {
                     context.studentId,
                     context.name,
                     context.sex,
-                    guidedSamples.map { it.embedding to it.jpeg },
+                    buildLocalReferenceCaptures(guidedSamples),
                     existingStudentId = context.existingStudentId
                 )
                 localStored = true
@@ -2198,7 +2242,8 @@ class MainActivity : ComponentActivity() {
                         context.name,
                         context.sex,
                         guidedSamples.map { it.jpeg },
-                        allowExistingStudent = context.existingStudentId != null
+                        allowExistingStudent = context.existingStudentId != null,
+                        referenceMetadata = guidedSamples
                     )
                     serverStored = true
                 } catch (error: Exception) {
@@ -2282,12 +2327,17 @@ class MainActivity : ComponentActivity() {
                     if (localFaces.samples.size != 1) {
                         throw IOException(getString(R.string.local_face_required))
                     }
-                    localStore.registerStudent(
+                    val sample = GuidedRegistrationSample(
+                        localFaces.samples.single().embedding,
+                        jpeg,
+                        pose = "FRONT",
+                        sourceCamera = currentReferenceSourceCamera()
+                    )
+                    localStore.registerStudentSamples(
                         studentId,
                         name,
                         sex,
-                        localFaces.samples.single().embedding,
-                        jpeg
+                        buildLocalReferenceCaptures(listOf(sample))
                     )
                     localStored = true
                 } catch (error: Exception) {
@@ -2784,19 +2834,43 @@ class MainActivity : ComponentActivity() {
         reference: LocalFaceReference,
         position: Int
     ) {
-        val image = ImageView(this).apply {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+        content.addView(TextView(this).apply {
+            setText(R.string.face_reference_original)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        content.addView(ImageView(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
             adjustViewBounds = true
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setPadding(dp(16), dp(8), dp(16), dp(8))
             contentDescription = getString(
                 R.string.face_reference_photo_description,
                 position
             )
             decodeOrientedBitmap(reference.photoJpeg)?.let(::setImageBitmap)
+        })
+        reference.mirroredPhotoJpeg?.let { mirroredPhoto ->
+            content.addView(TextView(this).apply {
+                setText(R.string.face_reference_mirrored)
+                setPadding(0, dp(12), 0, 0)
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            })
+            content.addView(ImageView(this).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+                adjustViewBounds = true
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                contentDescription = getString(R.string.face_reference_mirrored)
+                decodeOrientedBitmap(mirroredPhoto)?.let(::setImageBitmap)
+            })
         }
         AlertDialog.Builder(this)
             .setTitle(
@@ -2806,7 +2880,7 @@ class MainActivity : ComponentActivity() {
                     profile.name
                 )
             )
-            .setView(image)
+            .setView(ScrollView(this).apply { addView(content) })
             .setPositiveButton(R.string.close, null)
             .show()
     }
@@ -2953,7 +3027,9 @@ class MainActivity : ComponentActivity() {
                     )
                     GuidedRegistrationSample(
                         extraction.samples.single().embedding,
-                        bytes
+                        bytes,
+                        pose = "GALLERY",
+                        sourceCamera = "GALLERY"
                     )
                 }
 
@@ -2972,7 +3048,7 @@ class MainActivity : ComponentActivity() {
                             context.studentId,
                             context.name,
                             context.sex,
-                            samples.map { it.embedding to it.jpeg },
+                            buildLocalReferenceCaptures(samples),
                             existingStudentId = context.existingStudentId
                         )
                         localStored = true
@@ -2991,7 +3067,8 @@ class MainActivity : ComponentActivity() {
                                 context.name,
                                 context.sex,
                                 samples.map { it.jpeg },
-                                allowExistingStudent = true
+                                allowExistingStudent = true,
+                                referenceMetadata = samples
                             )
                             serverStored = true
                         } catch (error: Exception) {
@@ -3070,8 +3147,16 @@ class MainActivity : ComponentActivity() {
                 val replaced = localStore.replaceFaceReference(
                     context.profile.studentId,
                     context.referenceId,
-                    extraction.samples.single().embedding,
-                    bytes
+                    buildLocalReferenceCaptures(
+                        listOf(
+                            GuidedRegistrationSample(
+                                extraction.samples.single().embedding,
+                                bytes,
+                                pose = "GALLERY",
+                                sourceCamera = "GALLERY"
+                            )
+                        )
+                    ).single()
                 )
                 if (!replaced) throw IOException(getString(R.string.face_reference_not_found))
 
@@ -3976,17 +4061,31 @@ class MainActivity : ComponentActivity() {
         sex: String,
         jpegs: List<ByteArray>,
         replace: Boolean = true,
-        allowExistingStudent: Boolean = false
+        allowExistingStudent: Boolean = false,
+        referenceMetadata: List<GuidedRegistrationSample>? = null
     ) {
+        val fields = mutableMapOf(
+            "student_id" to studentId,
+            "name" to name,
+            "sex" to sex,
+            "replace_embeddings" to replace.toString(),
+            "allow_existing_student" to allowExistingStudent.toString()
+        )
+        if (referenceMetadata != null) {
+            fields["reference_metadata"] = JSONArray().apply {
+                referenceMetadata.forEach { sample ->
+                    put(
+                        JSONObject()
+                            .put("capture_id", sample.captureId)
+                            .put("pose", sample.pose)
+                            .put("source_camera", sample.sourceCamera)
+                    )
+                }
+            }.toString()
+        }
         postMultipartFiles(
             "$serverUrl/students/register",
-            mapOf(
-                "student_id" to studentId,
-                "name" to name,
-                "sex" to sex,
-                "replace_embeddings" to replace.toString(),
-                "allow_existing_student" to allowExistingStudent.toString()
-            ),
+            fields,
             "images",
             jpegs
         )
@@ -4055,6 +4154,52 @@ class MainActivity : ComponentActivity() {
             minimumFaceRatio = 0.02f,
             minimumFacePixels = 48
         )
+    }
+
+    private fun currentReferenceSourceCamera(): String =
+        if (lensFacing == CameraSelector.LENS_FACING_FRONT) "FRONT" else "BACK"
+
+    private fun buildLocalReferenceCaptures(
+        samples: List<GuidedRegistrationSample>
+    ): List<LocalReferenceCapture> {
+        return samples.map { sample ->
+            val mirroredJpeg = mirroredJpeg(sample.jpeg)
+            val mirroredExtraction = extractGalleryFaceReference(mirroredJpeg) {}
+            if (mirroredExtraction.samples.size != 1) {
+                throw IOException(
+                    "No se pudo validar la variante espejo de una referencia facial."
+                )
+            }
+            LocalReferenceCapture(
+                originalEmbedding = sample.embedding,
+                mirroredEmbedding = mirroredExtraction.samples.single().embedding,
+                originalPhotoJpeg = sample.jpeg,
+                mirroredPhotoJpeg = mirroredJpeg,
+                captureId = sample.captureId,
+                sourceCamera = sample.sourceCamera,
+                pose = sample.pose
+            )
+        }
+    }
+
+    private fun mirroredJpeg(jpeg: ByteArray): ByteArray {
+        val bitmap = decodeOrientedBitmap(jpeg)
+            ?: throw IOException("No se pudo preparar la variante espejo.")
+        val mirrored = Bitmap.createBitmap(
+            bitmap,
+            0,
+            0,
+            bitmap.width,
+            bitmap.height,
+            Matrix().apply { preScale(-1f, 1f) },
+            true
+        )
+        return ByteArrayOutputStream().use { output ->
+            if (!mirrored.compress(Bitmap.CompressFormat.JPEG, 95, output)) {
+                throw IOException("No se pudo guardar la variante espejo.")
+            }
+            output.toByteArray()
+        }
     }
 
     private fun extractGalleryFaceReference(
@@ -4504,35 +4649,26 @@ class MainActivity : ComponentActivity() {
             val health = JSONObject(body)
             health.optString("status") == "ok" &&
                 health.optBoolean("storage_encrypted", false) &&
-                isCompatibleRecognitionProfile(health.optJSONObject("recognition_profile"))
+                isCompatibleRecognitionProfile(health)
         } finally {
             connection.disconnect()
         }
     }
 
-    private fun isCompatibleRecognitionProfile(profile: JSONObject?): Boolean {
-        if (profile == null) return false
-        fun sameValue(name: String, expected: Float): Boolean {
-            return abs(profile.optDouble(name, Double.NaN) - expected.toDouble()) < 0.0001
-        }
-        return profile.optString("profile_id") == RecognitionPolicy.PROFILE_ID &&
-            profile.optString("model_sha256").equals(
+    private fun isCompatibleRecognitionProfile(health: JSONObject): Boolean {
+        val canonical = health.optJSONObject("canonical_recognition_profile") ?: return false
+        val offline = health.optJSONObject("offline_recognition_profile") ?: return false
+        return canonical.optString("role") == "canonical_server" &&
+            canonical.optInt("input_size") == RecognitionPolicy.INPUT_SIZE &&
+            canonical.optInt("embedding_size") == RecognitionPolicy.EMBEDDING_SIZE &&
+            offline.optString("role") == "offline_fallback" &&
+            offline.optString("profile_id") == RecognitionPolicy.PROFILE_ID &&
+            offline.optString("model_sha256").equals(
                 RecognitionPolicy.MODEL_SHA256,
                 ignoreCase = true
             ) &&
-            profile.optInt("input_size") == RecognitionPolicy.INPUT_SIZE &&
-            profile.optInt("embedding_size") == RecognitionPolicy.EMBEDDING_SIZE &&
-            sameValue("similarity_threshold", RecognitionPolicy.SIMILARITY_THRESHOLD) &&
-            sameValue(
-                "single_reference_threshold",
-                RecognitionPolicy.SINGLE_REFERENCE_THRESHOLD
-            ) &&
-            sameValue("minimum_score_margin", RecognitionPolicy.MINIMUM_SCORE_MARGIN) &&
-            sameValue(
-                "minimum_reference_support",
-                RecognitionPolicy.MINIMUM_REFERENCE_SUPPORT
-            ) &&
-            sameValue("second_reference_weight", RecognitionPolicy.SECOND_REFERENCE_WEIGHT)
+            offline.optInt("input_size") == RecognitionPolicy.INPUT_SIZE &&
+            offline.optInt("embedding_size") == RecognitionPolicy.EMBEDDING_SIZE
     }
 
     private fun postJson(url: String, payload: JSONObject): JSONObject {

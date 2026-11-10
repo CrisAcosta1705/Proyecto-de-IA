@@ -1,6 +1,7 @@
 import argparse
 from datetime import date
 import hmac
+import json
 import os
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from asistencia_ia.recognition.profile import (
     SECOND_REFERENCE_WEIGHT,
     SIMILARITY_THRESHOLD,
     SINGLE_REFERENCE_THRESHOLD,
+    MOBILE_PROFILE,
 )
 from asistencia_ia.security import DataCipher
 from asistencia_ia.services.attendance import AttendanceService, FaceProcessingError
@@ -40,6 +42,15 @@ class StudentSexRequest(BaseModel):
 class StudentProfileRequest(BaseModel):
     name: str = Field(min_length=2, max_length=150)
     sex: str
+
+
+class MergeStudentsRequest(BaseModel):
+    source_student_id: str
+    canonical_student_id: str
+
+
+class ReferenceQuarantineRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=300)
 
 
 async def _read_image(upload: UploadFile) -> bytes:
@@ -123,7 +134,7 @@ def create_app(
     )
     database = AttendanceDatabase(db_path, data_cipher=data_cipher)
     database.initialize()
-    detection_size = int(os.environ.get("INSIGHTFACE_DETECTION_SIZE", "640"))
+    detection_size = int(os.environ.get("INSIGHTFACE_DETECTION_SIZE", "960"))
     if not 320 <= detection_size <= 2048:
         raise ValueError("INSIGHTFACE_DETECTION_SIZE debe estar entre 320 y 2048.")
     detection_threshold = float(
@@ -235,6 +246,8 @@ def create_app(
             "model_loaded": bool(getattr(face_extractor, "loaded", True)),
             "storage_encrypted": data_cipher is not None,
             "recognition_profile": active_recognition_profile.to_dict(),
+            "canonical_recognition_profile": active_recognition_profile.to_dict(),
+            "offline_recognition_profile": MOBILE_PROFILE,
         }
 
     @app.get("/students")
@@ -252,6 +265,52 @@ def create_app(
             media_type=media_type,
             headers={"Cache-Control": "no-store"},
         )
+
+    @app.get("/students/{student_id}/references")
+    def student_references(student_id: str) -> list[dict[str, object]]:
+        return database.list_reference_captures(student_id.strip())
+
+    @app.get("/students/{student_id}/references/{capture_id}/{variant}")
+    def student_reference_photo(
+        student_id: str,
+        capture_id: str,
+        variant: str,
+    ) -> Response:
+        if variant.upper() not in {"ORIGINAL", "MIRRORED"}:
+            raise HTTPException(422, "La variante debe ser ORIGINAL o MIRRORED.")
+        stored = database.reference_photo(
+            student_id.strip(),
+            capture_id,
+            variant,
+        )
+        if stored is None:
+            raise HTTPException(404, "La referencia facial no existe.")
+        content, media_type = stored
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/students/{student_id}/references/{capture_id}/quarantine")
+    def quarantine_reference(
+        student_id: str,
+        capture_id: str,
+        request: ReferenceQuarantineRequest,
+    ) -> dict[str, object]:
+        captures = database.list_reference_captures(student_id.strip())
+        if not any(item["capture_id"] == capture_id for item in captures):
+            raise HTTPException(404, "La referencia facial no existe.")
+        database.quarantine_capture(capture_id, request.reason.strip())
+        return {"capture_id": capture_id, "active": False}
+
+    @app.post("/students/{student_id}/references/{capture_id}/restore")
+    def restore_reference(student_id: str, capture_id: str) -> dict[str, object]:
+        captures = database.list_reference_captures(student_id.strip())
+        if not any(item["capture_id"] == capture_id for item in captures):
+            raise HTTPException(404, "La referencia facial no existe.")
+        database.restore_capture(capture_id)
+        return {"capture_id": capture_id, "active": True}
 
     @app.patch("/students/{student_id}/sex")
     def update_student_sex(
@@ -322,11 +381,27 @@ def create_app(
         sex: str = Form("NO_ESPECIFICADO"),
         replace_embeddings: bool = Form(True),
         allow_existing_student: bool = Form(False),
+        reference_metadata: str | None = Form(None),
         images: list[UploadFile] = File(...),
     ) -> dict[str, object]:
         try:
             contents = [await _read_image(image) for image in images]
             mime_type = images[0].content_type or "image/jpeg"
+            parsed_metadata: list[dict[str, object]] | None = None
+            if reference_metadata:
+                try:
+                    decoded = json.loads(reference_metadata)
+                except json.JSONDecodeError as error:
+                    raise FaceProcessingError(
+                        "Los metadatos de referencias no contienen JSON valido."
+                    ) from error
+                if not isinstance(decoded, list) or not all(
+                    isinstance(item, dict) for item in decoded
+                ):
+                    raise FaceProcessingError(
+                        "Los metadatos de referencias deben ser una lista JSON."
+                    )
+                parsed_metadata = decoded
             added = await run_in_threadpool(
                 service.register_student,
                 student_id,
@@ -336,16 +411,72 @@ def create_app(
                 mime_type,
                 sex,
                 allow_existing_student,
+                parsed_metadata,
             )
             return {
                 "student_id": student_id.strip(),
                 "name": name.strip(),
                 "sex": sex.strip().upper(),
                 "embeddings_added": added,
+                "embedding_variants_added": added * 2,
                 "photo_stored": True,
             }
         except FaceProcessingError as error:
             raise HTTPException(422, str(error)) from error
+
+    @app.post("/maintenance/rebuild-references")
+    def rebuild_references() -> dict[str, object]:
+        rebuilt: list[str] = []
+        failed: dict[str, str] = {}
+        for student in database.list_students():
+            student_id = str(student["student_id"])
+            stored = database.student_photo(student_id)
+            if stored is None:
+                failed[student_id] = "sin fotografia"
+                continue
+            photo, mime_type = stored
+            try:
+                service.register_student(
+                    student_id,
+                    str(student["name"]),
+                    [photo],
+                    replace_embeddings=True,
+                    photo_mime_type=mime_type,
+                    sex=str(student["sex"]),
+                    allow_existing_student=True,
+                    reference_metadata=[
+                        {
+                            "source_camera": "SERVER_MIGRATION",
+                            "pose": "FRONT",
+                        }
+                    ],
+                )
+                rebuilt.append(student_id)
+            except (FaceProcessingError, ValueError) as error:
+                failed[student_id] = str(error)
+        return {"rebuilt": rebuilt, "failed": failed}
+
+    @app.post("/maintenance/merge-students")
+    def merge_students(request: MergeStudentsRequest) -> dict[str, object]:
+        merged = database.merge_students(
+            request.source_student_id.strip(),
+            request.canonical_student_id.strip(),
+        )
+        if not merged:
+            raise HTTPException(404, "No fue posible fusionar los estudiantes.")
+        return {
+            "merged": True,
+            "source_student_id": request.source_student_id.strip(),
+            "canonical_student_id": request.canonical_student_id.strip(),
+        }
+
+    @app.post("/maintenance/audit-references")
+    def audit_references() -> dict[str, object]:
+        quarantined = service.audit_reference_outliers()
+        return {
+            "quarantined": quarantined,
+            "quarantined_count": len(quarantined),
+        }
 
     @app.post("/sessions")
     def create_session(request: SessionRequest) -> dict[str, object]:
@@ -391,6 +522,14 @@ def create_app(
             return await run_in_threadpool(service.recognize, session_id, content)
         except LookupError as error:
             raise HTTPException(404, str(error)) from error
+        except (FaceProcessingError, ValueError) as error:
+            raise HTTPException(422, str(error)) from error
+
+    @app.post("/evaluation/recognize")
+    async def evaluate_recognition(image: UploadFile = File(...)) -> dict[str, object]:
+        try:
+            content = await _read_image(image)
+            return await run_in_threadpool(service.analyze, content)
         except (FaceProcessingError, ValueError) as error:
             raise HTTPException(422, str(error)) from error
 

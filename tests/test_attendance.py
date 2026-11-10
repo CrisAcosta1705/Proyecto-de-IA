@@ -11,7 +11,7 @@ from asistencia_ia.api import create_app
 from asistencia_ia.domain import BoundingBox
 from asistencia_ia.recognition.extractor import ExtractedFace
 from asistencia_ia.services.attendance import AttendanceService, FaceProcessingError
-from asistencia_ia.storage import AttendanceDatabase
+from asistencia_ia.storage import AttendanceDatabase, FaceReferenceCapture
 
 
 def _image_bytes() -> bytes:
@@ -90,6 +90,108 @@ class AttendanceServiceTest(unittest.TestCase):
         self.assertEqual(result["recognized_count"], 0)
         self.assertEqual(result["attendance_count"], 0)
         self.assertFalse(result["faces"][0]["recognized"])
+
+    def test_evaluation_analysis_never_writes_attendance(self) -> None:
+        self.extractor.faces = [_face([1.0, 0.0])]
+        self.service.register_student(
+            "estudiante_001",
+            "Estudiante Uno",
+            [_image_bytes()],
+        )
+        session_id = self.service.create_session("Programacion")
+
+        result = self.service.analyze(_image_bytes())
+
+        self.assertEqual(result["recognized_count"], 1)
+        self.assertEqual(result["attendance_count"], 0)
+        self.assertFalse(result["faces"][0]["attendance_recorded"])
+        self.assertEqual(self.database.attendance(session_id), [])
+
+    def test_reference_variants_share_one_logical_capture(self) -> None:
+        self.extractor.faces = [_face([1.0, 0.0])]
+
+        self.service.register_student(
+            "estudiante_001",
+            "Estudiante Uno",
+            [_image_bytes()],
+        )
+
+        captures = self.database.list_reference_captures("estudiante_001")
+        self.assertEqual(self.database.embedding_count("estudiante_001"), 1)
+        self.assertEqual(len(captures), 1)
+        self.assertEqual(captures[0]["variant_count"], 2)
+        capture_id = str(captures[0]["capture_id"])
+        self.assertIsNotNone(
+            self.database.reference_photo(
+                "estudiante_001", capture_id, "ORIGINAL"
+            )
+        )
+        self.assertIsNotNone(
+            self.database.reference_photo(
+                "estudiante_001", capture_id, "MIRRORED"
+            )
+        )
+
+    def test_reference_quarantine_is_reversible(self) -> None:
+        self.extractor.faces = [_face([1.0, 0.0])]
+        self.service.register_student(
+            "estudiante_001",
+            "Estudiante Uno",
+            [_image_bytes()],
+        )
+        capture_id = str(
+            self.database.list_reference_captures("estudiante_001")[0]["capture_id"]
+        )
+
+        self.assertTrue(self.database.quarantine_capture(capture_id, "prueba"))
+        self.assertEqual(self.database.embedding_count("estudiante_001"), 0)
+        self.assertTrue(self.database.restore_capture(capture_id))
+        self.assertEqual(self.database.embedding_count("estudiante_001"), 1)
+
+    def test_registration_rejects_a_face_owned_by_another_student(self) -> None:
+        self.extractor.faces = [_face([1.0, 0.0])]
+        self.service.register_student(
+            "estudiante_001",
+            "Estudiante Uno",
+            [_image_bytes()],
+        )
+
+        with self.assertRaisesRegex(FaceProcessingError, "otro estudiante"):
+            self.service.register_student(
+                "estudiante_002",
+                "Estudiante Dos",
+                [_image_bytes()],
+            )
+
+    def test_reference_audit_quarantines_an_outlier_without_deleting_it(self) -> None:
+        image = _image_bytes()
+        captures = [
+            FaceReferenceCapture(
+                original_embedding=embedding,
+                mirrored_embedding=embedding,
+                original_photo=image,
+                mirrored_photo=image,
+                capture_id=capture_id,
+            )
+            for capture_id, embedding in (
+                ("consistent-1", [1.0, 0.0, 0.0]),
+                ("consistent-2", [0.99, 0.1, 0.0]),
+                ("outlier", [0.0, 0.0, 1.0]),
+            )
+        ]
+        self.database.save_student_captures(
+            "estudiante_001",
+            "Estudiante Uno",
+            captures,
+        )
+
+        quarantined = self.service.audit_reference_outliers()
+
+        self.assertEqual([item["capture_id"] for item in quarantined], ["outlier"])
+        stored = self.database.list_reference_captures("estudiante_001")
+        outlier = next(item for item in stored if item["capture_id"] == "outlier")
+        self.assertEqual(outlier["active"], 0)
+        self.assertEqual(self.database.embedding_count("estudiante_001"), 2)
 
     def test_group_photo_recognizes_five_unique_students(self) -> None:
         embeddings = np.eye(5, dtype=np.float32)
@@ -330,11 +432,16 @@ class AttendanceServiceTest(unittest.TestCase):
         self.assertEqual(health.headers["cache-control"], "no-store, max-age=0")
         self.assertEqual(health.headers["x-content-type-options"], "nosniff")
         profile = health.json()["recognition_profile"]
-        self.assertEqual(profile["profile_id"], "arcface_w600k_mbf_112x112_v3")
+        self.assertEqual(profile["profile_id"], "arcface_w600k_r50_112x112_v1")
         self.assertEqual(profile["input_size"], 112)
         self.assertEqual(profile["embedding_size"], 512)
         self.assertEqual(profile["similarity_threshold"], 0.8)
         self.assertEqual(profile["single_reference_threshold"], 0.8)
+        offline_profile = health.json()["offline_recognition_profile"]
+        self.assertEqual(
+            offline_profile["profile_id"],
+            "arcface_w600k_mbf_112x112_v3",
+        )
         self.assertEqual(unauthorized.status_code, 401)
         self.assertEqual(unauthorized.headers["x-frame-options"], "DENY")
         self.assertEqual(authorized.status_code, 200)

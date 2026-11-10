@@ -19,7 +19,9 @@ object RecognitionPolicy {
 data class RecognitionReference(
     val studentId: String,
     val studentName: String,
-    val embedding: FloatArray
+    val embedding: FloatArray,
+    val captureId: String = "",
+    val variant: String = "ORIGINAL"
 )
 
 data class RecognitionIdentityScore(
@@ -36,35 +38,93 @@ data class UnifiedRecognitionPlan(
 )
 
 class UnifiedEmbeddingMatcher(references: List<RecognitionReference>) {
-    private val referencesByStudent = references
+    private data class StudentGallery(
+        val name: String,
+        val captures: Map<String, List<FloatArray>>
+    )
+
+    private val referencesByStudent: Map<String, StudentGallery> = references
+        .mapIndexed { index, item ->
+            item.copy(
+                embedding = normalized(item.embedding),
+                captureId = item.captureId.ifBlank { "legacy-$index" }
+            )
+        }
         .groupBy { it.studentId }
         .mapValues { (_, items) ->
-            items.map { item -> item.copy(embedding = normalized(item.embedding)) }
+            StudentGallery(
+                items.first().studentName,
+                items.groupBy { it.captureId }.mapValues { (_, variants) ->
+                    variants.map { it.embedding }
+                }
+            )
         }
 
     fun plan(queries: List<FloatArray>): UnifiedRecognitionPlan {
         val rankedBySample = queries.map(::rankedScores)
-        val candidates = rankedBySample.mapIndexedNotNull { sampleIndex, scores ->
-            acceptedScore(scores)?.let { Triple(it.similarity, sampleIndex, it) }
-        }.sortedWith(
-            compareByDescending<Triple<Float, Int, RecognitionIdentityScore>> { it.first }
-                .thenBy { it.second }
-                .thenBy { it.third.studentId }
-        )
-        val claimedStudents = mutableSetOf<String>()
-        val acceptedBySample = MutableList<RecognitionIdentityScore?>(queries.size) { null }
-        candidates.forEach { (_, sampleIndex, score) ->
-            if (claimedStudents.add(score.studentId)) acceptedBySample[sampleIndex] = score
+        if (queries.isEmpty()) return UnifiedRecognitionPlan(emptyList(), emptyList())
+        val studentIds = referencesByStudent.keys.sorted()
+        val scoreMaps = rankedBySample.map { scores -> scores.associateBy { it.studentId } }
+        val invalid = -1_000_000f
+        val weights = queries.indices.map { sampleIndex ->
+            MutableList(studentIds.size + queries.size) { invalid }.apply {
+                studentIds.forEachIndexed { studentIndex, studentId ->
+                    val score = scoreMaps[sampleIndex][studentId]
+                    if (score != null && score.hasReferenceSupport) {
+                        val threshold = thresholdFor(score)
+                        if (score.similarity >= threshold) {
+                            this[studentIndex] = score.similarity - threshold + 0.000001f
+                        }
+                    }
+                }
+                this[studentIds.size + sampleIndex] = 0f
+            }
         }
-        return UnifiedRecognitionPlan(rankedBySample, acceptedBySample)
+        val assignments = maximumWeightAssignment(weights)
+        var claimed = assignments.map { column -> studentIds.getOrNull(column) }
+            .filterNotNull()
+            .toSet()
+        for (iteration in 0..queries.size) {
+            val acceptedClaims = assignments.mapIndexed { sampleIndex, column ->
+                val studentId = studentIds.getOrNull(column) ?: return@mapIndexed null
+                val selected = scoreMaps[sampleIndex].getValue(studentId)
+                val bestCompetitor = rankedBySample[sampleIndex]
+                    .asSequence()
+                    .filter { it.studentId != studentId && it.studentId !in claimed }
+                    .maxOfOrNull { it.similarity }
+                studentId.takeIf {
+                    bestCompetitor == null ||
+                        selected.similarity - bestCompetitor >=
+                        RecognitionPolicy.MINIMUM_SCORE_MARGIN
+                }
+            }.filterNotNull().toSet()
+            if (acceptedClaims == claimed) break
+            claimed = acceptedClaims
+        }
+        val accepted = assignments.mapIndexed { sampleIndex, column ->
+            val studentId = studentIds.getOrNull(column) ?: return@mapIndexed null
+            val selected = scoreMaps[sampleIndex].getValue(studentId)
+            val bestAvailableCompetitor = rankedBySample[sampleIndex]
+                .asSequence()
+                .filter { it.studentId != studentId && it.studentId !in claimed }
+                .maxOfOrNull { it.similarity }
+            selected.takeIf {
+                studentId in claimed && (
+                    bestAvailableCompetitor == null ||
+                        selected.similarity - bestAvailableCompetitor >=
+                        RecognitionPolicy.MINIMUM_SCORE_MARGIN
+                    )
+            }
+        }
+        return UnifiedRecognitionPlan(rankedBySample, accepted)
     }
 
     private fun rankedScores(query: FloatArray): List<RecognitionIdentityScore> {
         val normalizedQuery = normalized(query)
-        return referencesByStudent.map { (studentId, references) ->
-            val similarities = references
-                .map { cosine(normalizedQuery, it.embedding) }
-                .sortedDescending()
+        return referencesByStudent.map { (studentId, gallery) ->
+            val similarities = gallery.captures.values.map { variants ->
+                variants.maxOf { cosine(normalizedQuery, it) }
+            }.sortedDescending()
             val bestSimilarity = similarities.first()
             val secondSimilarity = similarities.getOrNull(1)
             val combinedSimilarity = if (secondSimilarity == null) {
@@ -75,7 +135,7 @@ class UnifiedEmbeddingMatcher(references: List<RecognitionReference>) {
             }
             RecognitionIdentityScore(
                 studentId = studentId,
-                studentName = references.first().studentName,
+                studentName = gallery.name,
                 similarity = combinedSimilarity,
                 referenceCount = similarities.size,
                 hasReferenceSupport = secondSimilarity == null ||
@@ -87,22 +147,12 @@ class UnifiedEmbeddingMatcher(references: List<RecognitionReference>) {
         )
     }
 
-    private fun acceptedScore(
-        scores: List<RecognitionIdentityScore>
-    ): RecognitionIdentityScore? {
-        val best = scores.firstOrNull() ?: return null
-        val second = scores.getOrNull(1)
-        val hasMargin = second == null ||
-            best.similarity - second.similarity >= RecognitionPolicy.MINIMUM_SCORE_MARGIN
-        val threshold = if (best.referenceCount == 1) {
+    private fun thresholdFor(score: RecognitionIdentityScore): Float =
+        if (score.referenceCount == 1) {
             RecognitionPolicy.SINGLE_REFERENCE_THRESHOLD
         } else {
             RecognitionPolicy.SIMILARITY_THRESHOLD
         }
-        return best.takeIf {
-            it.similarity >= threshold && hasMargin && it.hasReferenceSupport
-        }
-    }
 
     private fun normalized(values: FloatArray): FloatArray {
         val norm = sqrt(values.sumOf { (it * it).toDouble() }).toFloat()
@@ -117,5 +167,62 @@ class UnifiedEmbeddingMatcher(references: List<RecognitionReference>) {
         var similarity = 0f
         for (index in left.indices) similarity += left[index] * right[index]
         return similarity
+    }
+
+    private fun maximumWeightAssignment(weights: List<List<Float>>): IntArray {
+        val rowCount = weights.size
+        if (rowCount == 0) return IntArray(0)
+        val columnCount = weights.first().size
+        require(columnCount >= rowCount && weights.all { it.size == columnCount })
+        val maxWeight = weights.maxOf { row -> row.max() }
+        val costs = weights.map { row -> row.map { maxWeight - it } }
+        val u = FloatArray(rowCount + 1)
+        val v = FloatArray(columnCount + 1)
+        val p = IntArray(columnCount + 1)
+        val way = IntArray(columnCount + 1)
+        for (row in 1..rowCount) {
+            p[0] = row
+            var column0 = 0
+            val minimum = FloatArray(columnCount + 1) { Float.POSITIVE_INFINITY }
+            val used = BooleanArray(columnCount + 1)
+            do {
+                used[column0] = true
+                val currentRow = p[column0]
+                var delta = Float.POSITIVE_INFINITY
+                var column1 = 0
+                for (column in 1..columnCount) {
+                    if (used[column]) continue
+                    val current = costs[currentRow - 1][column - 1] -
+                        u[currentRow] - v[column]
+                    if (current < minimum[column]) {
+                        minimum[column] = current
+                        way[column] = column0
+                    }
+                    if (minimum[column] < delta) {
+                        delta = minimum[column]
+                        column1 = column
+                    }
+                }
+                for (column in 0..columnCount) {
+                    if (used[column]) {
+                        u[p[column]] += delta
+                        v[column] -= delta
+                    } else {
+                        minimum[column] -= delta
+                    }
+                }
+                column0 = column1
+            } while (p[column0] != 0)
+            do {
+                val column1 = way[column0]
+                p[column0] = p[column1]
+                column0 = column1
+            } while (column0 != 0)
+        }
+        return IntArray(rowCount) { -1 }.also { assignment ->
+            for (column in 1..columnCount) {
+                if (p[column] != 0) assignment[p[column] - 1] = column - 1
+            }
+        }
     }
 }
