@@ -39,6 +39,25 @@ class _WideGroupApp:
         ]
 
 
+class _CompleteWideGroupApp:
+    def __init__(self):
+        self.calls = 0
+
+    def get(self, image):
+        self.calls += 1
+        return [
+            _face([100 + index * 190, 100, 220 + index * 190, 250], embedding)
+            for index, embedding in enumerate(
+                (
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 0.0],
+                )
+            )
+        ]
+
+
 class InsightFaceExtractorTest(unittest.TestCase):
     def test_rejects_a_recognition_model_with_a_different_hash(self):
         with TemporaryDirectory() as directory:
@@ -75,6 +94,17 @@ class InsightFaceExtractorTest(unittest.TestCase):
 
         self.assertEqual(app.calls, 1)
         self.assertEqual(len(faces), 1)
+
+    def test_complete_wide_group_does_not_repeat_detection_in_tiles(self):
+        app = _CompleteWideGroupApp()
+        extractor = InsightFaceExtractor()
+        extractor._app = app
+        image = np.zeros((500, 1000, 3), dtype=np.uint8)
+
+        faces = extractor.extract(image)
+
+        self.assertEqual(app.calls, 1)
+        self.assertEqual(len(faces), 4)
 
 
 if __name__ == "__main__":

@@ -114,7 +114,11 @@ class InsightFaceExtractor:
                 height,
             )
             supplemental_faces: list[ExtractedFace] = []
-            if width >= 800 and width / height >= 1.25:
+            if self._needs_supplemental_tiles(
+                primary_faces,
+                width,
+                height,
+            ):
                 tile_width = min(width, max(height, int(width * 0.58)))
                 step = max(1, int(tile_width * 0.68))
                 offsets = list(range(0, max(1, width - tile_width + 1), step))
@@ -132,6 +136,24 @@ class InsightFaceExtractor:
                     )
 
         return self._merge_supplemental_faces(primary_faces, supplemental_faces)
+
+    @staticmethod
+    def _needs_supplemental_tiles(
+        primary_faces: list[ExtractedFace],
+        width: int,
+        height: int,
+    ) -> bool:
+        if width < 800 or width / height < 1.25:
+            return False
+        if len(primary_faces) <= 1:
+            return True
+
+        face_sizes = sorted(
+            min(face.box.x2 - face.box.x1, face.box.y2 - face.box.y1)
+            for face in primary_faces
+        )
+        median_size = face_sizes[len(face_sizes) // 2]
+        return median_size < max(64, int(min(width, height) * 0.09))
 
     def extract_reference_variants(
         self,
