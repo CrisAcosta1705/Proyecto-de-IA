@@ -144,12 +144,16 @@ def create_app(
         raise ValueError(
             "INSIGHTFACE_DETECTION_THRESHOLD debe estar entre 0.2 y 0.95."
         )
+    onnx_threads = int(os.environ.get("FACE_ONNX_THREADS", "2"))
+    if not 1 <= onnx_threads <= 8:
+        raise ValueError("FACE_ONNX_THREADS debe estar entre 1 y 8.")
     face_extractor = extractor or InsightFaceExtractor(
         model_name=os.environ.get("INSIGHTFACE_MODEL", "buffalo_l"),
         model_root=Path(os.environ.get("INSIGHTFACE_ROOT", "models/insightface")),
         detection_threshold=detection_threshold,
         detection_size=(detection_size, detection_size),
         recognition_model_path=os.environ.get("ARC_FACE_MODEL_PATH") or None,
+        onnx_threads=onnx_threads,
     )
     active_recognition_profile = recognition_profile(
         similarity_threshold=threshold,
@@ -248,6 +252,7 @@ def create_app(
             "recognition_profile": active_recognition_profile.to_dict(),
             "canonical_recognition_profile": active_recognition_profile.to_dict(),
             "offline_recognition_profile": MOBILE_PROFILE,
+            "inference_threads": getattr(face_extractor, "onnx_threads", None),
         }
 
     @app.get("/students")

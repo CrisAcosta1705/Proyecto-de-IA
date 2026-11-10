@@ -76,6 +76,10 @@ class _CompleteWideGroupApp:
 
 
 class InsightFaceExtractorTest(unittest.TestCase):
+    def test_rejects_an_invalid_onnx_thread_count(self):
+        with self.assertRaisesRegex(ValueError, "entre 1 y 8"):
+            InsightFaceExtractor(onnx_threads=0)
+
     def test_rejects_a_recognition_model_with_a_different_hash(self):
         with TemporaryDirectory() as directory:
             model = Path(directory) / "w600k_mbf.onnx"

@@ -36,7 +36,10 @@ class InsightFaceExtractor:
         detection_size: tuple[int, int] = (640, 640),
         recognition_model_path: Path | str | None = None,
         expected_model_sha256: str = MODEL_SHA256,
+        onnx_threads: int = 2,
     ):
+        if not 1 <= onnx_threads <= 8:
+            raise ValueError("onnx_threads debe estar entre 1 y 8.")
         self.model_name = model_name
         self.model_root = Path(model_root)
         self.detection_threshold = detection_threshold
@@ -45,6 +48,7 @@ class InsightFaceExtractor:
             Path(recognition_model_path) if recognition_model_path else None
         )
         self.expected_model_sha256 = expected_model_sha256.lower()
+        self.onnx_threads = onnx_threads
         self._app = None
         self._recognition_session: Any | None = None
         self._recognition_input_name: str | None = None
@@ -67,6 +71,7 @@ class InsightFaceExtractor:
                 root=str(self.model_root),
                 allowed_modules=allowed_modules,
                 providers=["CPUExecutionProvider"],
+                sess_options=self._new_session_options(),
             )
             app.prepare(
                 ctx_id=-1,
@@ -95,10 +100,21 @@ class InsightFaceExtractor:
 
         session = ort.InferenceSession(
             str(model_path),
+            sess_options=self._new_session_options(),
             providers=["CPUExecutionProvider"],
         )
         self._recognition_session = session
         self._recognition_input_name = session.get_inputs()[0].name
+
+    def _new_session_options(self):
+        import onnxruntime as ort
+
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = self.onnx_threads
+        options.inter_op_num_threads = 1
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        return options
 
     def extract(self, image: NDArray[np.uint8]) -> list[ExtractedFace]:
         if image.ndim != 3 or image.shape[2] != 3:
