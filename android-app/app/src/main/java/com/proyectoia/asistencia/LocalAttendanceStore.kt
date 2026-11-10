@@ -131,11 +131,6 @@ class LocalAttendanceStore(context: Context) :
         private const val DATABASE_NAME = "asistencia_local.db"
         private const val DATABASE_VERSION = 5
         private const val BIOMETRIC_CIPHER_VERSION = "1"
-        private const val SIMILARITY_THRESHOLD = 0.50f
-        private const val SINGLE_REFERENCE_THRESHOLD = 0.58f
-        private const val MINIMUM_SCORE_MARGIN = 0.05f
-        private const val MINIMUM_REFERENCE_SUPPORT = 0.38f
-        private const val SECOND_REFERENCE_WEIGHT = 0.30f
         private const val MAX_EMBEDDINGS_PER_STUDENT = 5
         private const val THUMBNAIL_MAX_DIMENSION = 256
         private const val REFERENCE_MAX_DIMENSION = 1600
@@ -1045,11 +1040,12 @@ class LocalAttendanceStore(context: Context) :
         val registered = loadEmbeddings(readableDatabase)
             .filterNot { it.studentId == studentId } +
             referenceEmbeddings.map { embedding ->
-                RegisteredEmbedding(studentId, studentName, embedding)
+                RecognitionReference(studentId, studentName, embedding)
             }
-        val results = samples.map { sample ->
-            val scores = rankedScores(sample.embedding, registered)
-            val accepted = acceptedScore(scores)
+        val plan = UnifiedEmbeddingMatcher(registered).plan(samples.map { it.embedding })
+        val results = samples.mapIndexed { index, sample ->
+            val scores = plan.rankedBySample[index]
+            val accepted = plan.acceptedBySample[index]
             LocalRecognitionFace(
                 Rect(sample.bounds),
                 accepted?.studentId,
@@ -1061,7 +1057,7 @@ class LocalAttendanceStore(context: Context) :
         return LocalRecognitionBatch(results, 0, imageWidth, imageHeight)
     }
 
-    private fun loadEmbeddings(db: SQLiteDatabase): List<RegisteredEmbedding> {
+    private fun loadEmbeddings(db: SQLiteDatabase): List<RecognitionReference> {
         return db.rawQuery(
             """
             SELECT e.student_id, s.name, e.embedding
@@ -1074,7 +1070,7 @@ class LocalAttendanceStore(context: Context) :
             buildList {
                 while (cursor.moveToNext()) {
                     add(
-                        RegisteredEmbedding(
+                        RecognitionReference(
                             cursor.getString(0),
                             cursor.getString(1),
                             decodeEmbedding(cursor.getBlob(2), cursor.getString(0))
@@ -1379,85 +1375,12 @@ class LocalAttendanceStore(context: Context) :
         return FloatArray(plaintext.size / Float.SIZE_BYTES) { buffer.float }
     }
 
-    private fun cosine(left: FloatArray, right: FloatArray): Float {
-        if (left.size != right.size) return -1f
-        var similarity = 0f
-        for (index in left.indices) similarity += left[index] * right[index]
-        return similarity
-    }
-
-    private fun rankedScores(
-        embedding: FloatArray,
-        registered: List<RegisteredEmbedding>
-    ): List<StudentScore> {
-        return registered
-            .asSequence()
-            .groupBy { it.studentId }
-            .map { (_, embeddings) ->
-                val similarities = embeddings
-                    .map { cosine(embedding, it.embedding) }
-                    .sortedDescending()
-                val bestSimilarity = similarities.first()
-                val secondSimilarity = similarities.getOrNull(1)
-                val combinedSimilarity = if (secondSimilarity == null) {
-                    bestSimilarity
-                } else {
-                    bestSimilarity * (1f - SECOND_REFERENCE_WEIGHT) +
-                        secondSimilarity * SECOND_REFERENCE_WEIGHT
-                }
-                val identity = embeddings.first()
-                StudentScore(
-                    identity.studentId,
-                    identity.studentName,
-                    combinedSimilarity,
-                    similarities.size,
-                    secondSimilarity == null ||
-                        secondSimilarity >= MINIMUM_REFERENCE_SUPPORT
-                )
-            }
-            .sortedByDescending { it.similarity }
-    }
-
-    private fun acceptedScore(scores: List<StudentScore>): StudentScore? {
-        val best = scores.firstOrNull() ?: return null
-        val second = scores.getOrNull(1)
-        val hasMargin = second == null ||
-            best.similarity - second.similarity >= MINIMUM_SCORE_MARGIN
-        val threshold = if (best.referenceCount == 1) {
-            SINGLE_REFERENCE_THRESHOLD
-        } else {
-            SIMILARITY_THRESHOLD
-        }
-        return best.takeIf {
-            it.similarity >= threshold && hasMargin && it.hasReferenceSupport
-        }
-    }
-
     private fun recognitionPlan(
         samples: List<LocalFaceSample>,
-        registered: List<RegisteredEmbedding>
-    ): RecognitionPlan {
-        val rankedBySample = samples.map { sample ->
-            rankedScores(sample.embedding, registered)
-        }
-        val candidates = rankedBySample.mapIndexedNotNull { index, scores ->
-            acceptedScore(scores)?.let { index to it }
-        }.sortedByDescending { (_, score) -> score.similarity }
-        val claimedStudents = mutableSetOf<String>()
-        val acceptedBySample = MutableList<StudentScore?>(samples.size) { null }
-        candidates.forEach { (sampleIndex, score) ->
-            if (claimedStudents.add(score.studentId)) {
-                acceptedBySample[sampleIndex] = score
-            }
-        }
-        return RecognitionPlan(rankedBySample, acceptedBySample)
+        registered: List<RecognitionReference>
+    ): UnifiedRecognitionPlan {
+        return UnifiedEmbeddingMatcher(registered).plan(samples.map { it.embedding })
     }
-
-    private data class RegisteredEmbedding(
-        val studentId: String,
-        val studentName: String,
-        val embedding: FloatArray
-    )
 
     private data class StudentProfileRow(
         val studentId: String,
@@ -1467,16 +1390,4 @@ class LocalAttendanceStore(context: Context) :
         val photoEmbeddingId: Long?
     )
 
-    private data class StudentScore(
-        val studentId: String,
-        val studentName: String,
-        val similarity: Float,
-        val referenceCount: Int,
-        val hasReferenceSupport: Boolean
-    )
-
-    private data class RecognitionPlan(
-        val rankedBySample: List<List<StudentScore>>,
-        val acceptedBySample: List<StudentScore?>
-    )
 }

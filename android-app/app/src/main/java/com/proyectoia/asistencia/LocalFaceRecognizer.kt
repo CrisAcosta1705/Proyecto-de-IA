@@ -14,6 +14,7 @@ import android.graphics.RectF
 import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceLandmark
 import java.nio.FloatBuffer
+import java.security.MessageDigest
 import kotlin.math.sqrt
 
 data class LocalFaceSample(
@@ -23,16 +24,16 @@ data class LocalFaceSample(
 
 class LocalFaceRecognizer(context: Context) : AutoCloseable {
     companion object {
-        private const val MODEL_FILE = "w600k_mbf.onnx"
-        const val MODEL_ID = "w600k_mbf_v2_corrected_alignment"
-        private const val INPUT_SIZE = 112
-        private const val EMBEDDING_SIZE = 512
+        const val MODEL_ID = RecognitionPolicy.PROFILE_ID
+        private const val INPUT_SIZE = RecognitionPolicy.INPUT_SIZE
+        private const val EMBEDDING_SIZE = RecognitionPolicy.EMBEDDING_SIZE
         private val INPUT_SHAPE = longArrayOf(1, 3, INPUT_SIZE.toLong(), INPUT_SIZE.toLong())
-        private val TARGET_EYES = floatArrayOf(
-            38.2946f,
-            51.6963f,
-            73.5318f,
-            51.5014f
+        private val TARGET_LANDMARKS = arrayOf(
+            floatArrayOf(38.2946f, 51.6963f),
+            floatArrayOf(73.5318f, 51.5014f),
+            floatArrayOf(56.0252f, 71.7366f),
+            floatArrayOf(41.5493f, 92.3655f),
+            floatArrayOf(70.7299f, 92.2041f)
         )
     }
 
@@ -41,7 +42,13 @@ class LocalFaceRecognizer(context: Context) : AutoCloseable {
     private val inputName: String
 
     init {
-        val model = context.assets.open(MODEL_FILE).use { it.readBytes() }
+        val model = context.assets.open(RecognitionPolicy.MODEL_FILE).use { it.readBytes() }
+        val modelSha256 = MessageDigest.getInstance("SHA-256")
+            .digest(model)
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        require(modelSha256 == RecognitionPolicy.MODEL_SHA256) {
+            "El modelo facial local no coincide con el perfil de reconocimiento."
+        }
         session = OrtSession.SessionOptions().use { options ->
             options.setIntraOpNumThreads(2)
             environment.createSession(model, options)
@@ -90,11 +97,13 @@ class LocalFaceRecognizer(context: Context) : AutoCloseable {
         val canvas = Canvas(output)
         canvas.drawColor(Color.BLACK)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        // ML Kit names eyes from the subject's perspective. ArcFace's first
-        // target point is the eye at the left side of the displayed image.
+        val landmarks = arcFaceLandmarks(face)
+        if (landmarks != null) {
+            canvas.drawBitmap(bitmap, similarityTransform(landmarks), paint)
+            return output
+        }
         val imageLeftEye = face.getLandmark(FaceLandmark.RIGHT_EYE)?.position
         val imageRightEye = face.getLandmark(FaceLandmark.LEFT_EYE)?.position
-
         if (imageLeftEye != null && imageRightEye != null) {
             val sourceEyes = floatArrayOf(
                 imageLeftEye.x,
@@ -102,8 +111,14 @@ class LocalFaceRecognizer(context: Context) : AutoCloseable {
                 imageRightEye.x,
                 imageRightEye.y
             )
+            val targetEyes = floatArrayOf(
+                TARGET_LANDMARKS[0][0],
+                TARGET_LANDMARKS[0][1],
+                TARGET_LANDMARKS[1][0],
+                TARGET_LANDMARKS[1][1]
+            )
             val transform = Matrix()
-            if (transform.setPolyToPoly(sourceEyes, 0, TARGET_EYES, 0, 2)) {
+            if (transform.setPolyToPoly(sourceEyes, 0, targetEyes, 0, 2)) {
                 canvas.drawBitmap(bitmap, transform, paint)
                 return output
             }
@@ -117,6 +132,55 @@ class LocalFaceRecognizer(context: Context) : AutoCloseable {
             paint
         )
         return output
+    }
+
+    private fun arcFaceLandmarks(face: Face): Array<FloatArray>? {
+        // ML Kit names left/right from the subject's perspective. ArcFace uses
+        // the order seen in the image: left eye, right eye, nose, mouth corners.
+        val types = intArrayOf(
+            FaceLandmark.RIGHT_EYE,
+            FaceLandmark.LEFT_EYE,
+            FaceLandmark.NOSE_BASE,
+            FaceLandmark.MOUTH_RIGHT,
+            FaceLandmark.MOUTH_LEFT
+        )
+        return Array(types.size) { index ->
+            val point = face.getLandmark(types[index])?.position ?: return null
+            floatArrayOf(point.x, point.y)
+        }
+    }
+
+    private fun similarityTransform(source: Array<FloatArray>): Matrix {
+        val sourceCenterX = source.map { it[0] }.average().toFloat()
+        val sourceCenterY = source.map { it[1] }.average().toFloat()
+        val targetCenterX = TARGET_LANDMARKS.map { it[0] }.average().toFloat()
+        val targetCenterY = TARGET_LANDMARKS.map { it[1] }.average().toFloat()
+        var denominator = 0f
+        var aNumerator = 0f
+        var bNumerator = 0f
+        source.indices.forEach { index ->
+            val sourceX = source[index][0] - sourceCenterX
+            val sourceY = source[index][1] - sourceCenterY
+            val targetX = TARGET_LANDMARKS[index][0] - targetCenterX
+            val targetY = TARGET_LANDMARKS[index][1] - targetCenterY
+            denominator += sourceX * sourceX + sourceY * sourceY
+            aNumerator += sourceX * targetX + sourceY * targetY
+            bNumerator += sourceX * targetY - sourceY * targetX
+        }
+        require(denominator > 0f) { "No se pudieron alinear los puntos faciales." }
+        val a = aNumerator / denominator
+        val b = bNumerator / denominator
+        val translateX = targetCenterX - a * sourceCenterX + b * sourceCenterY
+        val translateY = targetCenterY - b * sourceCenterX - a * sourceCenterY
+        return Matrix().apply {
+            setValues(
+                floatArrayOf(
+                    a, -b, translateX,
+                    b, a, translateY,
+                    0f, 0f, 1f
+                )
+            )
+        }
     }
 
     private fun expandedSquare(face: Rect, imageWidth: Int, imageHeight: Int): Rect {

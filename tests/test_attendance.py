@@ -329,6 +329,12 @@ class AttendanceServiceTest(unittest.TestCase):
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.headers["cache-control"], "no-store, max-age=0")
         self.assertEqual(health.headers["x-content-type-options"], "nosniff")
+        profile = health.json()["recognition_profile"]
+        self.assertEqual(profile["profile_id"], "arcface_w600k_mbf_112x112_v3")
+        self.assertEqual(profile["input_size"], 112)
+        self.assertEqual(profile["embedding_size"], 512)
+        self.assertEqual(profile["similarity_threshold"], 0.8)
+        self.assertEqual(profile["single_reference_threshold"], 0.8)
         self.assertEqual(unauthorized.status_code, 401)
         self.assertEqual(unauthorized.headers["x-frame-options"], "DENY")
         self.assertEqual(authorized.status_code, 200)

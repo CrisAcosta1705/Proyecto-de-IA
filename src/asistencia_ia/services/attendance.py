@@ -13,6 +13,13 @@ from asistencia_ia.recognition import (
     FaceEmbeddingExtractor,
 )
 from asistencia_ia.recognition.matcher import cosine_similarity
+from asistencia_ia.recognition.profile import (
+    MINIMUM_REFERENCE_SUPPORT,
+    MINIMUM_SCORE_MARGIN,
+    SECOND_REFERENCE_WEIGHT,
+    SIMILARITY_THRESHOLD,
+    SINGLE_REFERENCE_THRESHOLD,
+)
 from asistencia_ia.storage import AttendanceDatabase
 
 
@@ -59,17 +66,21 @@ class AttendanceService:
         self,
         database: AttendanceDatabase,
         extractor: FaceEmbeddingExtractor,
-        similarity_threshold: float = 0.50,
-        minimum_score_margin: float = 0.05,
+        similarity_threshold: float = SIMILARITY_THRESHOLD,
+        minimum_score_margin: float = MINIMUM_SCORE_MARGIN,
         single_reference_threshold: float | None = None,
-        minimum_reference_support: float = 0.38,
-        second_reference_weight: float = 0.30,
+        minimum_reference_support: float = MINIMUM_REFERENCE_SUPPORT,
+        second_reference_weight: float = SECOND_REFERENCE_WEIGHT,
     ):
         self.database = database
         self.extractor = extractor
         self.similarity_threshold = similarity_threshold
         self.minimum_score_margin = minimum_score_margin
-        self.single_reference_threshold = single_reference_threshold
+        self.single_reference_threshold = (
+            SINGLE_REFERENCE_THRESHOLD
+            if single_reference_threshold is None
+            else single_reference_threshold
+        )
         self.minimum_reference_support = minimum_reference_support
         self.second_reference_weight = second_reference_weight
 

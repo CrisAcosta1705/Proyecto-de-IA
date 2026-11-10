@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 import numpy as np
@@ -38,6 +40,15 @@ class _WideGroupApp:
 
 
 class InsightFaceExtractorTest(unittest.TestCase):
+    def test_rejects_a_recognition_model_with_a_different_hash(self):
+        with TemporaryDirectory() as directory:
+            model = Path(directory) / "w600k_mbf.onnx"
+            model.write_bytes(b"modelo-distinto")
+            extractor = InsightFaceExtractor(recognition_model_path=model)
+
+            with self.assertRaisesRegex(RuntimeError, "no coincide"):
+                extractor._load_recognition_model()
+
     def test_wide_group_combines_overlapping_tiles_without_duplicates(self):
         extractor = InsightFaceExtractor()
         extractor._app = _WideGroupApp()

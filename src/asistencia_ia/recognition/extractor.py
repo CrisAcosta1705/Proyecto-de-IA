@@ -1,13 +1,16 @@
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 from threading import Lock
-from typing import Protocol
+from typing import Any, Protocol
 
+import cv2
 import numpy as np
 from numpy.typing import NDArray
 
 from asistencia_ia.domain import BoundingBox
 from asistencia_ia.recognition.matcher import normalize_embedding
+from asistencia_ia.recognition.profile import MODEL_SHA256
 
 
 @dataclass(frozen=True)
@@ -31,12 +34,20 @@ class InsightFaceExtractor:
         model_root: Path | str = Path("models/insightface"),
         detection_threshold: float = 0.45,
         detection_size: tuple[int, int] = (640, 640),
+        recognition_model_path: Path | str | None = None,
+        expected_model_sha256: str = MODEL_SHA256,
     ):
         self.model_name = model_name
         self.model_root = Path(model_root)
         self.detection_threshold = detection_threshold
         self.detection_size = detection_size
+        self.recognition_model_path = (
+            Path(recognition_model_path) if recognition_model_path else None
+        )
+        self.expected_model_sha256 = expected_model_sha256.lower()
         self._app = None
+        self._recognition_session: Any | None = None
+        self._recognition_input_name: str | None = None
         self._lock = Lock()
 
     @property
@@ -48,10 +59,13 @@ class InsightFaceExtractor:
             from insightface.app import FaceAnalysis
 
             self.model_root.mkdir(parents=True, exist_ok=True)
+            allowed_modules = ["detection"]
+            if self.recognition_model_path is None:
+                allowed_modules.append("recognition")
             app = FaceAnalysis(
                 name=self.model_name,
                 root=str(self.model_root),
-                allowed_modules=["detection", "recognition"],
+                allowed_modules=allowed_modules,
                 providers=["CPUExecutionProvider"],
             )
             app.prepare(
@@ -60,7 +74,31 @@ class InsightFaceExtractor:
                 det_size=self.detection_size,
             )
             self._app = app
+            if self.recognition_model_path is not None:
+                self._load_recognition_model()
         return self._app
+
+    def _load_recognition_model(self) -> None:
+        model_path = self.recognition_model_path
+        if model_path is None or self._recognition_session is not None:
+            return
+        if not model_path.is_file():
+            raise FileNotFoundError(
+                f"No se encontro el modelo facial unificado en {model_path}."
+            )
+        digest = hashlib.sha256(model_path.read_bytes()).hexdigest()
+        if digest != self.expected_model_sha256:
+            raise RuntimeError(
+                "El modelo facial del servidor no coincide con el modelo de Android."
+            )
+        import onnxruntime as ort
+
+        session = ort.InferenceSession(
+            str(model_path),
+            providers=["CPUExecutionProvider"],
+        )
+        self._recognition_session = session
+        self._recognition_input_name = session.get_inputs()[0].name
 
     def extract(self, image: NDArray[np.uint8]) -> list[ExtractedFace]:
         if image.ndim != 3 or image.shape[2] != 3:
@@ -69,7 +107,12 @@ class InsightFaceExtractor:
         height, width = image.shape[:2]
         with self._lock:
             app = self._load()
-            primary_faces = self._convert_faces(app.get(image), width, height)
+            primary_faces = self._convert_faces(
+                app.get(image),
+                image,
+                width,
+                height,
+            )
             supplemental_faces: list[ExtractedFace] = []
             if width >= 800 and width / height >= 1.35:
                 tile_width = max(height, int(width * 0.65))
@@ -79,6 +122,7 @@ class InsightFaceExtractor:
                     supplemental_faces.extend(
                         self._convert_faces(
                             app.get(tile),
+                            tile,
                             width,
                             height,
                             x_offset=x_offset,
@@ -87,9 +131,10 @@ class InsightFaceExtractor:
 
         return self._merge_supplemental_faces(primary_faces, supplemental_faces)
 
-    @staticmethod
     def _convert_faces(
+        self,
         faces,
+        source_image: NDArray[np.uint8],
         image_width: int,
         image_height: int,
         x_offset: int = 0,
@@ -97,7 +142,7 @@ class InsightFaceExtractor:
         extracted: list[ExtractedFace] = []
 
         for face in faces:
-            embedding = face.normed_embedding
+            embedding = self._face_embedding(source_image, face)
             if embedding is None:
                 continue
             x1, y1, x2, y2 = face.bbox.astype(int).tolist()
@@ -113,6 +158,24 @@ class InsightFaceExtractor:
                 )
             )
         return extracted
+
+    def _face_embedding(self, image: NDArray[np.uint8], face):
+        session = self._recognition_session
+        input_name = self._recognition_input_name
+        if session is None or input_name is None:
+            return getattr(face, "normed_embedding", None)
+
+        landmarks = getattr(face, "kps", None)
+        if landmarks is None or np.asarray(landmarks).shape != (5, 2):
+            return None
+        from insightface.utils.face_align import norm_crop
+
+        aligned = norm_crop(image, landmark=np.asarray(landmarks), image_size=112)
+        rgb = cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB)
+        tensor = (rgb.astype(np.float32) - 127.5) / 127.5
+        tensor = np.transpose(tensor, (2, 0, 1))[np.newaxis, ...]
+        output = session.run(None, {input_name: tensor})[0]
+        return np.asarray(output, dtype=np.float32).reshape(-1)
 
     @classmethod
     def _remove_duplicates(

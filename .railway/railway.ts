@@ -27,6 +27,7 @@ export default defineRailway(() => {
       ASISTENCIA_DATA_ENCRYPTION_KEY: preserve(),
       ASISTENCIA_DATA_ENCRYPTION_KEY_PREVIOUS: preserve(),
       ASISTENCIA_DB: "/var/data/asistencia.db",
+      ARC_FACE_MODEL_PATH: "/app/models/w600k_mbf.onnx",
       FACE_MINIMUM_REFERENCE_SUPPORT: "0.38",
       FACE_MINIMUM_SCORE_MARGIN: "0.05",
       FACE_SECOND_REFERENCE_WEIGHT: "0.30",

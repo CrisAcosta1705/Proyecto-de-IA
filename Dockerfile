@@ -3,6 +3,7 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    ARC_FACE_MODEL_PATH=/app/models/w600k_mbf.onnx \
     ASISTENCIA_DB=/var/data/asistencia.db \
     INSIGHTFACE_ROOT=/var/data/models/insightface \
     INSIGHTFACE_MODEL=buffalo_sc
@@ -21,6 +22,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md requirements-server.txt ./
 COPY src ./src
+COPY android-app/app/src/main/assets/w600k_mbf.onnx ./models/w600k_mbf.onnx
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install --requirement requirements-server.txt \

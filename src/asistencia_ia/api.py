@@ -12,7 +12,14 @@ from starlette.concurrency import run_in_threadpool
 import uvicorn
 
 from asistencia_ia.discovery import DISCOVERY_PORT, DiscoveryResponder
-from asistencia_ia.recognition import InsightFaceExtractor
+from asistencia_ia.recognition import InsightFaceExtractor, recognition_profile
+from asistencia_ia.recognition.profile import (
+    MINIMUM_REFERENCE_SUPPORT,
+    MINIMUM_SCORE_MARGIN,
+    SECOND_REFERENCE_WEIGHT,
+    SIMILARITY_THRESHOLD,
+    SINGLE_REFERENCE_THRESHOLD,
+)
 from asistencia_ia.security import DataCipher
 from asistencia_ia.services.attendance import AttendanceService, FaceProcessingError
 from asistencia_ia.storage import AttendanceDatabase
@@ -86,22 +93,33 @@ def create_app(
     threshold = (
         similarity_threshold
         if similarity_threshold is not None
-        else float(os.environ.get("FACE_SIMILARITY_THRESHOLD", "0.50"))
+        else float(
+            os.environ.get(
+                "FACE_SIMILARITY_THRESHOLD",
+                str(SIMILARITY_THRESHOLD),
+            )
+        )
     )
     minimum_score_margin = float(
-        os.environ.get("FACE_MINIMUM_SCORE_MARGIN", "0.05")
+        os.environ.get("FACE_MINIMUM_SCORE_MARGIN", str(MINIMUM_SCORE_MARGIN))
     )
     single_reference_threshold = float(
         os.environ.get(
             "FACE_SINGLE_REFERENCE_THRESHOLD",
-            str(max(threshold, 0.58)),
+            str(max(threshold, SINGLE_REFERENCE_THRESHOLD)),
         )
     )
     minimum_reference_support = float(
-        os.environ.get("FACE_MINIMUM_REFERENCE_SUPPORT", "0.38")
+        os.environ.get(
+            "FACE_MINIMUM_REFERENCE_SUPPORT",
+            str(MINIMUM_REFERENCE_SUPPORT),
+        )
     )
     second_reference_weight = float(
-        os.environ.get("FACE_SECOND_REFERENCE_WEIGHT", "0.30")
+        os.environ.get(
+            "FACE_SECOND_REFERENCE_WEIGHT",
+            str(SECOND_REFERENCE_WEIGHT),
+        )
     )
     database = AttendanceDatabase(db_path, data_cipher=data_cipher)
     database.initialize()
@@ -120,6 +138,14 @@ def create_app(
         model_root=Path(os.environ.get("INSIGHTFACE_ROOT", "models/insightface")),
         detection_threshold=detection_threshold,
         detection_size=(detection_size, detection_size),
+        recognition_model_path=os.environ.get("ARC_FACE_MODEL_PATH") or None,
+    )
+    active_recognition_profile = recognition_profile(
+        similarity_threshold=threshold,
+        single_reference_threshold=single_reference_threshold,
+        minimum_score_margin=minimum_score_margin,
+        minimum_reference_support=minimum_reference_support,
+        second_reference_weight=second_reference_weight,
     )
     service = AttendanceService(
         database,
@@ -132,7 +158,7 @@ def create_app(
     )
     app = FastAPI(
         title="Asistencia estudiantil con IA",
-        version="0.8.0",
+        version="0.9.0",
         description="API para registro facial y asistencia sin duplicados.",
         docs_url=None if is_production else "/docs",
         redoc_url=None if is_production else "/redoc",
@@ -208,6 +234,7 @@ def create_app(
             "status": "ok",
             "model_loaded": bool(getattr(face_extractor, "loaded", True)),
             "storage_encrypted": data_cipher is not None,
+            "recognition_profile": active_recognition_profile.to_dict(),
         }
 
     @app.get("/students")

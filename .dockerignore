@@ -8,7 +8,16 @@ __pycache__
 *.pyo
 *.apk
 *.aab
-android-app
+android-app/*
+!android-app/app
+android-app/app/*
+!android-app/app/src
+android-app/app/src/*
+!android-app/app/src/main
+android-app/app/src/main/*
+!android-app/app/src/main/assets
+android-app/app/src/main/assets/*
+!android-app/app/src/main/assets/w600k_mbf.onnx
 data
 models
 notebooks

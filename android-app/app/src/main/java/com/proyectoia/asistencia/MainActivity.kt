@@ -284,11 +284,6 @@ class MainActivity : ComponentActivity() {
         val faces: List<Face>
     )
 
-    private data class LocalRecognitionPreparation(
-        val extraction: LocalFaceExtraction,
-        val preview: LocalRecognitionBatch
-    )
-
     private data class CaptureQuality(
         val brightness: Float,
         val contrast: Float,
@@ -3769,37 +3764,25 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 ProcessingMode.AUTOMATIC -> {
-                    val localPreparation = runCatching {
-                        prepareLocalRecognition(jpeg)
-                    }
-                    val serverResult = if (
+                    val useServer =
                         selection.serverUrl != null &&
                         runCatching { isHealthyServer(selection.serverUrl) }.getOrDefault(false)
-                    ) {
-                        runCatching { recognizeOnServer(selection, jpeg) }
-                    } else {
-                        null
-                    }
-                    val useLocal = localPreparation.isSuccess && (
-                        serverResult?.isSuccess != true ||
-                            preferLocalRecognition(
-                                localPreparation.getOrThrow().preview,
-                                serverResult.getOrThrow()
+                    if (useServer) {
+                        val serverResult = runCatching {
+                            recognizeOnServer(selection, jpeg, verifyProfile = false)
+                        }
+                        if (serverResult.isSuccess) {
+                            showRecognitionResult(serverResult.getOrThrow())
+                        } else {
+                            Log.w(
+                                LOG_TAG,
+                                "El motor del servidor fallo; se usa el motor local.",
+                                serverResult.exceptionOrNull()
                             )
-                        )
-                    if (useLocal) {
-                        showLocalRecognitionResult(
-                            commitLocalRecognition(
-                                selection,
-                                localPreparation.getOrThrow().extraction
-                            )
-                        )
-                    } else if (serverResult?.isSuccess == true) {
-                        showRecognitionResult(serverResult.getOrThrow())
+                            showLocalRecognitionResult(recognizeLocally(selection, jpeg))
+                        }
                     } else {
-                        throw localPreparation.exceptionOrNull()
-                            ?: serverResult?.exceptionOrNull()
-                            ?: IOException(getString(R.string.server_unreachable))
+                        showLocalRecognitionResult(recognizeLocally(selection, jpeg))
                     }
                 }
             }
@@ -4011,9 +3994,15 @@ class MainActivity : ComponentActivity() {
 
     private fun recognizeOnServer(
         selection: AttendanceSelection,
-        jpeg: ByteArray
+        jpeg: ByteArray,
+        verifyProfile: Boolean = true
     ): JSONObject {
         val serverUrl = requireNotNull(selection.serverUrl)
+        if (verifyProfile && !isHealthyServer(serverUrl)) {
+            throw IOException(
+                "El servidor no esta disponible o usa un perfil facial incompatible."
+            )
+        }
         val created = postJson(
             "$serverUrl/sessions",
             JSONObject()
@@ -4034,18 +4023,9 @@ class MainActivity : ComponentActivity() {
         selection: AttendanceSelection,
         jpeg: ByteArray
     ): LocalRecognitionBatch {
-        return commitLocalRecognition(selection, prepareLocalRecognition(jpeg).extraction)
-    }
-
-    private fun prepareLocalRecognition(jpeg: ByteArray): LocalRecognitionPreparation {
         setProcessing(true, getString(R.string.local_processing))
         val extraction = extractLocalFaces(jpeg)
-        val preview = localStore.previewRecognition(
-            extraction.samples,
-            extraction.bitmap.width,
-            extraction.bitmap.height
-        )
-        return LocalRecognitionPreparation(extraction, preview)
+        return commitLocalRecognition(selection, extraction)
     }
 
     private fun commitLocalRecognition(
@@ -4063,20 +4043,6 @@ class MainActivity : ComponentActivity() {
             extraction.bitmap.width,
             extraction.bitmap.height
         )
-    }
-
-    private fun preferLocalRecognition(
-        local: LocalRecognitionBatch,
-        server: JSONObject
-    ): Boolean {
-        if (local.recognizedCount > 0) return true
-        val serverFaces = server.optInt(
-            "faces_detected",
-            server.optJSONArray("faces")?.length() ?: 0
-        )
-        val serverRecognized = server.optInt("recognized_count", 0)
-        if (serverRecognized > 0) return false
-        return local.faces.isNotEmpty() || serverFaces == 0
     }
 
     private fun extractLocalFaces(jpeg: ByteArray): LocalFaceExtraction {
@@ -4537,10 +4503,36 @@ class MainActivity : ComponentActivity() {
             val body = connection.inputStream.bufferedReader().use { it.readText() }
             val health = JSONObject(body)
             health.optString("status") == "ok" &&
-                health.optBoolean("storage_encrypted", false)
+                health.optBoolean("storage_encrypted", false) &&
+                isCompatibleRecognitionProfile(health.optJSONObject("recognition_profile"))
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun isCompatibleRecognitionProfile(profile: JSONObject?): Boolean {
+        if (profile == null) return false
+        fun sameValue(name: String, expected: Float): Boolean {
+            return abs(profile.optDouble(name, Double.NaN) - expected.toDouble()) < 0.0001
+        }
+        return profile.optString("profile_id") == RecognitionPolicy.PROFILE_ID &&
+            profile.optString("model_sha256").equals(
+                RecognitionPolicy.MODEL_SHA256,
+                ignoreCase = true
+            ) &&
+            profile.optInt("input_size") == RecognitionPolicy.INPUT_SIZE &&
+            profile.optInt("embedding_size") == RecognitionPolicy.EMBEDDING_SIZE &&
+            sameValue("similarity_threshold", RecognitionPolicy.SIMILARITY_THRESHOLD) &&
+            sameValue(
+                "single_reference_threshold",
+                RecognitionPolicy.SINGLE_REFERENCE_THRESHOLD
+            ) &&
+            sameValue("minimum_score_margin", RecognitionPolicy.MINIMUM_SCORE_MARGIN) &&
+            sameValue(
+                "minimum_reference_support",
+                RecognitionPolicy.MINIMUM_REFERENCE_SUPPORT
+            ) &&
+            sameValue("second_reference_weight", RecognitionPolicy.SECOND_REFERENCE_WEIGHT)
     }
 
     private fun postJson(url: String, payload: JSONObject): JSONObject {

@@ -4,6 +4,14 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from asistencia_ia.recognition.profile import (
+    MINIMUM_REFERENCE_SUPPORT,
+    MINIMUM_SCORE_MARGIN,
+    SECOND_REFERENCE_WEIGHT,
+    SIMILARITY_THRESHOLD,
+    SINGLE_REFERENCE_THRESHOLD,
+)
+
 
 Embedding = NDArray[np.float32]
 
@@ -45,11 +53,11 @@ class EmbeddingMatcher:
     def __init__(
         self,
         references: Mapping[str, Sequence[ArrayLike]],
-        threshold: float,
-        minimum_margin: float = 0.05,
+        threshold: float = SIMILARITY_THRESHOLD,
+        minimum_margin: float = MINIMUM_SCORE_MARGIN,
         single_reference_threshold: float | None = None,
-        minimum_reference_support: float = 0.38,
-        second_reference_weight: float = 0.30,
+        minimum_reference_support: float = MINIMUM_REFERENCE_SUPPORT,
+        second_reference_weight: float = SECOND_REFERENCE_WEIGHT,
     ):
         if not -1.0 <= threshold <= 1.0:
             raise ValueError("El umbral debe estar entre -1 y 1.")
@@ -68,7 +76,7 @@ class EmbeddingMatcher:
         self._threshold = threshold
         self._minimum_margin = minimum_margin
         self._single_reference_threshold = (
-            threshold
+            max(threshold, SINGLE_REFERENCE_THRESHOLD)
             if single_reference_threshold is None
             else single_reference_threshold
         )
@@ -145,7 +153,7 @@ class EmbeddingMatcher:
                     ),
                 )
             )
-        return sorted(scores, key=lambda item: item.similarity, reverse=True)
+        return sorted(scores, key=lambda item: (-item.similarity, item.student_id))
 
     def _match_from_scores(
         self,

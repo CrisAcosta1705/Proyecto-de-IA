@@ -7,12 +7,12 @@ estudiantes autorizados mediante reconocimiento facial.
 
 ```text
 Aplicacion Android
-    |-- Modo telefono: ML Kit + MobileFaceNet ONNX + SQLite local
+    |-- Modo telefono: ML Kit + ArcFace w600k_mbf ONNX + SQLite local
     |-- Modo servidor: fotografia JPEG 1080p hacia FastAPI
-    `-- Modo automatico: telefono primero y servidor como respaldo
+    `-- Modo automatico: servidor compatible y telefono como respaldo
 
 API FastAPI permanente
-    |-- InsightFace/ArcFace de mayor capacidad
+    |-- InsightFace para deteccion + el mismo ArcFace w600k_mbf ONNX
     |-- HTTPS y clave de acceso
     `-- SQLite y modelos en disco persistente
 ```
@@ -27,7 +27,7 @@ identidades y asistencia sin computadora ni conexion a Internet.
   veinte en el servidor.
 - La fotografia original, el nombre, el carnet y los embeddings se guardan en
   SQLite.
-- Deteccion y alineacion facial con InsightFace.
+- Alineacion ArcFace de cinco puntos tanto en Android como en Railway.
 - Embeddings ArcFace y comparacion con umbral configurable.
 - Resultado `no identificado` cuando no se supera el umbral.
 - Sesiones de asistencia por clase.
@@ -151,8 +151,9 @@ valores predeterminados. El margen evita aceptar identidades ambiguas; el
 soporte y el peso de la segunda referencia exigen corroboracion cuando el
 estudiante tiene varias fotos. El
 tamaño de detección conserva más detalle en fotografías grupales. Estos valores
-pueden configurarse como variables de Railway después de calibrarlos con las
-fotografías reales del proyecto.
+forman parte del perfil facial compartido y deben mantenerse iguales en
+Railway y Android. La app valida el perfil publicado en `/health` antes de usar
+el servidor.
 
 El servicio de este proyecto esta publicado en:
 
@@ -170,9 +171,10 @@ plan. El volumen evita que los registros desaparezcan al desplegar una nueva
 version, pero se recomienda activar copias de seguridad antes de almacenar datos
 biometricos reales.
 
-El plan gratuito utiliza `buffalo_sc`, que ocupa menos espacio y memoria. Para
-usar `buffalo_l` con mayor precision se debe ampliar el volumen y la memoria del
-servicio antes de cambiar `INSIGHTFACE_MODEL`.
+Railway utiliza el detector ligero de `buffalo_sc`, pero la extracción de
+identidad siempre se ejecuta con el mismo archivo `w600k_mbf.onnx` incluido en
+Android. El servidor valida su SHA-256 al cargarlo para impedir que ambos
+motores comparen embeddings de modelos diferentes.
 
 ## Flujo desde Android
 
@@ -322,7 +324,7 @@ embeddings de SQLite se cifran con AES-256-GCM usando
 arrancar. El contenedor aplica permisos privados, los endpoints biometricos
 envian cabeceras `no-store` y la documentacion publica se desactiva en
 produccion. La app rechaza servidores cuyo `/health` no confirme
-`storage_encrypted=true`.
+`storage_encrypted=true` o cuyo perfil facial no coincida con el perfil local.
 
 Para rotar la clave, conserva temporalmente la anterior en
 `ASISTENCIA_DATA_ENCRYPTION_KEY_PREVIOUS`, configura una nueva clave principal
