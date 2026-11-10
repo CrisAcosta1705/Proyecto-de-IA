@@ -1,7 +1,9 @@
 import unittest
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
@@ -14,6 +16,21 @@ def _face(box, embedding, confidence=0.9):
         normed_embedding=np.asarray(embedding, dtype=np.float32),
         det_score=confidence,
     )
+
+
+class _BatchRecognitionSession:
+    def __init__(self):
+        self.batch_sizes = []
+
+    def run(self, output_names, inputs):
+        batch = inputs["input"]
+        self.batch_sizes.append(batch.shape[0])
+        return [
+            np.asarray(
+                [[1.0, float(index), 0.5] for index in range(batch.shape[0])],
+                dtype=np.float32,
+            )
+        ]
 
 
 class _WideGroupApp:
@@ -105,6 +122,43 @@ class InsightFaceExtractorTest(unittest.TestCase):
 
         self.assertEqual(app.calls, 1)
         self.assertEqual(len(faces), 4)
+
+    def test_recognition_embeddings_are_computed_in_one_batch(self):
+        session = _BatchRecognitionSession()
+        extractor = InsightFaceExtractor()
+        extractor._recognition_session = session
+        extractor._recognition_input_name = "input"
+        image = np.zeros((300, 300, 3), dtype=np.uint8)
+        landmarks = np.asarray(
+            [[90, 100], [150, 100], [120, 135], [95, 170], [145, 170]],
+            dtype=np.float32,
+        )
+        faces = [
+            SimpleNamespace(kps=landmarks),
+            SimpleNamespace(kps=landmarks + 10),
+        ]
+
+        insightface_module = ModuleType("insightface")
+        utils_module = ModuleType("insightface.utils")
+        face_align_module = ModuleType("insightface.utils.face_align")
+        face_align_module.norm_crop = lambda *args, **kwargs: np.zeros(
+            (112, 112, 3),
+            dtype=np.uint8,
+        )
+        with patch.dict(
+            sys.modules,
+            {
+                "insightface": insightface_module,
+                "insightface.utils": utils_module,
+                "insightface.utils.face_align": face_align_module,
+            },
+        ):
+            embeddings = extractor._face_embeddings(image, faces)
+
+        self.assertEqual(session.batch_sizes, [2])
+        self.assertEqual(len(embeddings), 2)
+        np.testing.assert_allclose(embeddings[0], [1.0, 0.0, 0.5])
+        np.testing.assert_allclose(embeddings[1], [1.0, 1.0, 0.5])
 
 
 if __name__ == "__main__":

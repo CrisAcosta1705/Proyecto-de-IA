@@ -174,9 +174,9 @@ class InsightFaceExtractor:
         y_offset: int = 0,
     ) -> list[ExtractedFace]:
         extracted: list[ExtractedFace] = []
+        embeddings = self._face_embeddings(source_image, faces)
 
-        for face in faces:
-            embedding = self._face_embedding(source_image, face)
+        for face, embedding in zip(faces, embeddings, strict=True):
             if embedding is None:
                 continue
             x1, y1, x2, y2 = face.bbox.astype(int).tolist()
@@ -193,23 +193,46 @@ class InsightFaceExtractor:
             )
         return extracted
 
-    def _face_embedding(self, image: NDArray[np.uint8], face):
+    def _face_embeddings(
+        self,
+        image: NDArray[np.uint8],
+        faces,
+    ) -> list[NDArray[np.float32] | None]:
         session = self._recognition_session
         input_name = self._recognition_input_name
         if session is None or input_name is None:
-            return getattr(face, "normed_embedding", None)
+            return [getattr(face, "normed_embedding", None) for face in faces]
 
-        landmarks = getattr(face, "kps", None)
-        if landmarks is None or np.asarray(landmarks).shape != (5, 2):
-            return None
         from insightface.utils.face_align import norm_crop
 
-        aligned = norm_crop(image, landmark=np.asarray(landmarks), image_size=112)
-        rgb = cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB)
-        tensor = (rgb.astype(np.float32) - 127.5) / 127.5
-        tensor = np.transpose(tensor, (2, 0, 1))[np.newaxis, ...]
-        output = session.run(None, {input_name: tensor})[0]
-        return np.asarray(output, dtype=np.float32).reshape(-1)
+        tensors: list[NDArray[np.float32]] = []
+        valid_indices: list[int] = []
+        embeddings: list[NDArray[np.float32] | None] = [None] * len(faces)
+        for index, face in enumerate(faces):
+            landmarks = getattr(face, "kps", None)
+            if landmarks is None or np.asarray(landmarks).shape != (5, 2):
+                continue
+            aligned = norm_crop(
+                image,
+                landmark=np.asarray(landmarks),
+                image_size=112,
+            )
+            rgb = cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB)
+            tensor = (rgb.astype(np.float32) - 127.5) / 127.5
+            tensors.append(np.transpose(tensor, (2, 0, 1)))
+            valid_indices.append(index)
+
+        if not tensors:
+            return embeddings
+
+        batch = np.stack(tensors, axis=0).astype(np.float32, copy=False)
+        output = np.asarray(
+            session.run(None, {input_name: batch})[0],
+            dtype=np.float32,
+        )
+        for index, vector in zip(valid_indices, output, strict=True):
+            embeddings[index] = vector.reshape(-1)
+        return embeddings
 
     @classmethod
     def _remove_duplicates(
