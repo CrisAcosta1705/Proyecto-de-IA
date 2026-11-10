@@ -130,6 +130,18 @@ class InsightFaceExtractor:
                 height,
             )
             supplemental_faces: list[ExtractedFace] = []
+            if not primary_faces:
+                contextual_image, padding = self._add_detection_context(image)
+                supplemental_faces.extend(
+                    self._convert_faces(
+                        app.get(contextual_image),
+                        contextual_image,
+                        width,
+                        height,
+                        x_offset=-padding,
+                        y_offset=-padding,
+                    )
+                )
             if self._needs_supplemental_tiles(
                 primary_faces,
                 width,
@@ -152,6 +164,24 @@ class InsightFaceExtractor:
                     )
 
         return self._merge_supplemental_faces(primary_faces, supplemental_faces)
+
+    @staticmethod
+    def _add_detection_context(
+        image: NDArray[np.uint8],
+    ) -> tuple[NDArray[np.uint8], int]:
+        """Reduce rostros extremos al agregar contexto antes de SCRFD."""
+        height, width = image.shape[:2]
+        padding = max(24, int(round(max(width, height) * 0.15)))
+        contextual = cv2.copyMakeBorder(
+            image,
+            padding,
+            padding,
+            padding,
+            padding,
+            cv2.BORDER_CONSTANT,
+            value=(127, 127, 127),
+        )
+        return contextual, padding
 
     @staticmethod
     def _needs_supplemental_tiles(

@@ -75,6 +75,19 @@ class _CompleteWideGroupApp:
         ]
 
 
+class _ContextRecoveryApp:
+    def __init__(self):
+        self.calls = 0
+        self.shapes = []
+
+    def get(self, image):
+        self.calls += 1
+        self.shapes.append(image.shape[:2])
+        if self.calls == 1:
+            return []
+        return [_face([250, 350, 450, 650], [1.0, 0.0, 0.0])]
+
+
 class InsightFaceExtractorTest(unittest.TestCase):
     def test_rejects_an_invalid_onnx_thread_count(self):
         with self.assertRaisesRegex(ValueError, "entre 1 y 8"):
@@ -115,6 +128,22 @@ class InsightFaceExtractorTest(unittest.TestCase):
 
         self.assertEqual(app.calls, 1)
         self.assertEqual(len(faces), 1)
+
+    def test_empty_portrait_is_retried_with_context_and_box_is_remapped(self):
+        app = _ContextRecoveryApp()
+        extractor = InsightFaceExtractor()
+        extractor._app = app
+        image = np.zeros((1000, 500, 3), dtype=np.uint8)
+
+        faces = extractor.extract(image)
+
+        self.assertEqual(app.calls, 2)
+        self.assertEqual(app.shapes, [(1000, 500), (1300, 800)])
+        self.assertEqual(len(faces), 1)
+        self.assertEqual(
+            (faces[0].box.x1, faces[0].box.y1, faces[0].box.x2, faces[0].box.y2),
+            (100, 200, 300, 500),
+        )
 
     def test_complete_wide_group_does_not_repeat_detection_in_tiles(self):
         app = _CompleteWideGroupApp()
